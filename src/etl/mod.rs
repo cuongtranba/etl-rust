@@ -4,8 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::bucket::Bucket;
-use crate::bucket::Config;
+use crate::bucket::{Bucket, BucketError, Config};
 
 pub trait Processor<E, T>
 where
@@ -59,9 +58,7 @@ where
                     item = receiver.recv() => {
                         match item {
                             Some(item) => {
-                                if let Err(e) = bucket_clone.consume(item).await {
-                                    return Err(Box::new(e) as Box<dyn Error + Send + Sync>);
-                                }
+                                bucket_clone.consume(item).await?;
                             },
                             None => {
                                 break;
@@ -73,30 +70,18 @@ where
             Ok::<(), Box<dyn Error + Send + Sync>>(())
         });
         let etl_clone = Arc::clone(&self.etl);
-        let cancel_for_closure = cancel.clone();
 
         bucket
             .run(&cancel, move |_ctx: &CancellationToken, items: &[E]| {
                 let transforms: Vec<T> = items
                     .iter()
-                    .map(|item| etl_clone.transform(&cancel_for_closure, item.clone()))
+                    .map(|item| etl_clone.transform(_ctx, item.clone()))
                     .collect();
                 etl_clone
-                    .load(&cancel_for_closure, transforms)
-                    .map_err(|e| {
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            e.to_string(),
-                        )) as Box<dyn std::error::Error + Send + Sync>
-                    })
+                    .load(_ctx, transforms)
+                    .map_err(|e| BucketError::ProcessorError(e.to_string()))
             })
-            .await
-            .map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Bucket run failed: {}", e),
-                )) as Box<dyn Error>
-            })?;
+            .await?;
 
         let extract_result = extract_handle
             .await

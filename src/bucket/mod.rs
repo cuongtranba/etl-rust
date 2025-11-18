@@ -1,28 +1,46 @@
 use derive_builder::Builder;
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug, Clone)]
+pub enum BucketError {
+    ProcessorError(String),
+    ChannelClosed,
+    Cancelled,
+}
+
+// BucketError is automatically Send + Sync because:
+// - String is Send + Sync
+// - All variants contain only Send + Sync types
+
+impl std::fmt::Display for BucketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BucketError::ProcessorError(msg) => write!(f, "ProcessorError: {}", msg),
+            BucketError::ChannelClosed => write!(f, "ChannelClosed"),
+            BucketError::Cancelled => write!(f, "Cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for BucketError {}
+
+// Note: Rust automatically implements From<BucketError> for Box<dyn Error>
+// because BucketError implements std::error::Error trait.
+// No manual implementation needed!
+
 pub trait Processor<T> {
-    fn process(
-        &self,
-        cancel: &CancellationToken,
-        items: &[T],
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    fn process(&self, cancel: &CancellationToken, items: &[T]) -> Result<(), BucketError>;
 }
 
 impl<T, F> Processor<T> for F
 where
-    F: Fn(&CancellationToken, &[T]) -> Result<(), Box<dyn Error + Send + Sync>>,
+    F: Fn(&CancellationToken, &[T]) -> Result<(), BucketError>,
 {
-    fn process(
-        &self,
-        ctx: &CancellationToken,
-        items: &[T],
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn process(&self, ctx: &CancellationToken, items: &[T]) -> Result<(), BucketError> {
         self(ctx, items)
     }
 }
@@ -74,11 +92,7 @@ where
         self.sender.send(item).await
     }
 
-    pub async fn run<P>(
-        &self,
-        cancel: &CancellationToken,
-        process: P,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    pub async fn run<P>(&self, cancel: &CancellationToken, process: P) -> Result<(), BucketError>
     where
         P: Processor<T> + Send + Sync + 'static,
         T: Clone,
@@ -114,7 +128,7 @@ where
             match handle.await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => errors.push(e),
-                Err(e) => errors.push(Box::new(e) as Box<dyn Error + Send + Sync>),
+                Err(e) => errors.push(BucketError::ProcessorError(e.to_string())),
             }
         }
 
@@ -132,7 +146,7 @@ where
         cancel_token: &CancellationToken,
         batch_size: usize,
         timeout_duration: Duration,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    ) -> Result<(), BucketError>
     where
         P: Processor<T> + Send + Sync,
         T: Clone,
@@ -180,7 +194,7 @@ where
         ctx: &CancellationToken,
         process: &P,
         queue: &mut Vec<T>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    ) -> Result<(), BucketError>
     where
         P: Processor<T>,
     {
