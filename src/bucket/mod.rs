@@ -6,38 +6,23 @@ use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
-pub struct Context {
-    cancel_token: CancellationToken,
-}
-
-impl Context {
-    pub fn new() -> Self {
-        Self {
-            cancel_token: CancellationToken::new(),
-        }
-    }
-
-    pub fn with_cancel_token(token: CancellationToken) -> Self {
-        Self {
-            cancel_token: token,
-        }
-    }
-
-    pub fn cancel(&self) {
-        self.cancel_token.cancel();
-    }
-}
-
 pub trait Processor<T> {
-    fn process(&self, ctx: &Context, items: &[T]) -> Result<(), Box<dyn Error + Send + Sync>>;
+    fn process(
+        &self,
+        cancel: &CancellationToken,
+        items: &[T],
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 impl<T, F> Processor<T> for F
 where
-    F: Fn(&Context, &[T]) -> Result<(), Box<dyn Error + Send + Sync>>,
+    F: Fn(&CancellationToken, &[T]) -> Result<(), Box<dyn Error + Send + Sync>>,
 {
-    fn process(&self, ctx: &Context, items: &[T]) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn process(
+        &self,
+        ctx: &CancellationToken,
+        items: &[T],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self(ctx, items)
     }
 }
@@ -56,7 +41,7 @@ pub struct Config {
 }
 
 pub struct Bucket<T> {
-    config: Config,
+    config: Arc<Config>,
     sender: mpsc::Sender<T>,
     receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<T>>>,
 }
@@ -75,7 +60,7 @@ impl<T> Bucket<T>
 where
     T: Send + 'static,
 {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Arc<Config>) -> Self {
         let (sender, receiver) = mpsc::channel(config.batch_size);
 
         Self {
@@ -91,7 +76,7 @@ where
 
     pub async fn run<P>(
         &self,
-        ctx: &Context,
+        cancel: &CancellationToken,
         process: P,
     ) -> Result<(), Box<dyn Error + Send + Sync>>
     where
@@ -99,14 +84,13 @@ where
         T: Clone,
     {
         let process = Arc::new(process);
-        let cancel_token = ctx.cancel_token.clone();
 
         let mut handles = Vec::new();
 
         for worker_id in 0..self.config.worker_num {
             let receiver = self.receiver.clone();
             let process = process.clone();
-            let cancel_token = cancel_token.clone();
+            let cancel_token = cancel.clone();
             let batch_size = self.config.batch_size;
             let timeout = self.config.timeout;
 
@@ -115,7 +99,7 @@ where
                     worker_id,
                     receiver,
                     process,
-                    cancel_token,
+                    &cancel_token,
                     batch_size,
                     timeout,
                 )
@@ -145,7 +129,7 @@ where
         worker_id: usize,
         receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<T>>>,
         process: Arc<P>,
-        cancel_token: CancellationToken,
+        cancel_token: &CancellationToken,
         batch_size: usize,
         timeout_duration: Duration,
     ) -> Result<(), Box<dyn Error + Send + Sync>>
@@ -157,18 +141,16 @@ where
         let mut ticker = interval(timeout_duration);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let ctx = Context::with_cancel_token(cancel_token.clone());
-
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     println!("Worker {} shutting down", worker_id);
-                    return Self::process_queue(&ctx, &*process, &mut queue);
+                    return Self::process_queue(cancel_token, &*process, &mut queue);
                 }
 
                 _ = ticker.tick() => {
                     if !queue.is_empty() {
-                        Self::process_queue(&ctx, &*process, &mut queue)?;
+                        Self::process_queue(cancel_token, &*process, &mut queue)?;
                     }
                 }
 
@@ -181,12 +163,12 @@ where
                             queue.push(item);
 
                             if queue.len() >= batch_size {
-                                Self::process_queue(&ctx, &*process, &mut queue)?;
+                                Self::process_queue(cancel_token, &*process, &mut queue)?;
                             }
                         }
                         None => {
                             println!("Worker {} channel closed", worker_id);
-                            return Self::process_queue(&ctx, &*process, &mut queue);
+                            return Self::process_queue(cancel_token, &*process, &mut queue);
                         }
                     }
                 }
@@ -195,7 +177,7 @@ where
     }
 
     fn process_queue<P>(
-        ctx: &Context,
+        ctx: &CancellationToken,
         process: &P,
         queue: &mut Vec<T>,
     ) -> Result<(), Box<dyn Error + Send + Sync>>
@@ -203,7 +185,7 @@ where
         P: Processor<T>,
     {
         if !queue.is_empty() {
-            process.process(ctx, queue)?; // Call trait method
+            process.process(ctx, queue)?;
             queue.clear();
         }
         Ok(())
