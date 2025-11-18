@@ -1,16 +1,179 @@
-use crate::bucket::{Bucket, BucketError, Config, Processor};
-use async_trait::async_trait;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::sync::{Mutex, mpsc};
+use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+
+use super::config::Config;
+use super::processor::Processor;
+use super::types::BucketError;
+
+pub struct Bucket<T> {
+    config: Arc<Config>,
+    sender: Arc<Mutex<Option<mpsc::Sender<T>>>>,
+    receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+}
+
+impl<T> Clone for Bucket<T> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            sender: self.sender.clone(),
+            receiver: self.receiver.clone(),
+        }
+    }
+}
+
+impl<T> Bucket<T>
+where
+    T: Send + 'static,
+{
+    pub fn new(config: Arc<Config>) -> Self {
+        let (sender, receiver) = mpsc::channel(config.batch_size);
+
+        Self {
+            config,
+            sender: Arc::new(Mutex::new(Some(sender))),
+            receiver: Arc::new(Mutex::new(receiver)),
+        }
+    }
+
+    pub async fn consume(&self, item: T) -> Result<(), mpsc::error::SendError<T>> {
+        let sender_guard = self.sender.lock().await;
+        if let Some(sender) = sender_guard.as_ref() {
+            sender.send(item).await
+        } else {
+            Err(mpsc::error::SendError(item))
+        }
+    }
+
+    pub async fn close(&self) {
+        let mut sender_guard = self.sender.lock().await;
+        *sender_guard = None;
+    }
+
+    pub async fn run<P>(&self, cancel: &CancellationToken, process: P) -> Result<(), BucketError>
+    where
+        P: Processor<T> + Send + Sync + 'static,
+        T: Clone,
+    {
+        let process = Arc::new(process);
+        let mut handles = Vec::new();
+
+        for worker_id in 0..self.config.worker_num {
+            let receiver = self.receiver.clone();
+            let process = process.clone();
+            let cancel_token = cancel.clone();
+            let batch_size = self.config.batch_size;
+            let timeout = self.config.timeout;
+
+            let handle = tokio::spawn(async move {
+                Self::worker(
+                    worker_id,
+                    receiver,
+                    process,
+                    &cancel_token,
+                    batch_size,
+                    timeout,
+                )
+                .await
+            });
+
+            handles.push(handle);
+        }
+
+        // ... (phần còn lại của hàm run không đổi)
+        let mut errors = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e),
+                Err(e) => errors.push(BucketError::ProcessorError(e.to_string())),
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors.into_iter().next().unwrap());
+        }
+
+        Ok(())
+    }
+
+    async fn worker<P>(
+        worker_id: usize,
+        receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+        process: Arc<P>,
+        cancel_token: &CancellationToken,
+        batch_size: usize,
+        timeout_duration: Duration,
+    ) -> Result<(), BucketError>
+    where
+        P: Processor<T> + Send + Sync,
+        T: Clone,
+    {
+        // ... (code của worker không đổi)
+        let mut queue: Vec<T> = Vec::with_capacity(batch_size);
+        let mut ticker = interval(timeout_duration);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    println!("Worker {} shutting down", worker_id);
+                    return Self::process_queue(cancel_token, &*process, &mut queue).await;
+                }
+
+                _ = ticker.tick() => {
+                    if !queue.is_empty() {
+                        Self::process_queue(cancel_token, &*process, &mut queue).await?;
+                    }
+                }
+
+                item = async {
+                    let mut rx = receiver.lock().await;
+                    rx.recv().await
+                } => {
+                    match item {
+                        Some(item) => {
+                            queue.push(item);
+
+                            if queue.len() >= batch_size {
+                                Self::process_queue(cancel_token, &*process, &mut queue).await?;
+                            }
+                        }
+                        None => {
+                            println!("Worker {} channel closed", worker_id);
+                            return Self::process_queue(cancel_token, &*process, &mut queue).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn process_queue<P>(
+        ctx: &CancellationToken,
+        process: &P,
+        queue: &mut Vec<T>,
+    ) -> Result<(), BucketError>
+    where
+        P: Processor<T>,
+    {
+        if !queue.is_empty() {
+            process.process(ctx, queue).await?;
+            queue.clear();
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::sleep;
 
-    // Helper struct for counting processed items
     struct CountingProcessor {
         counter: Arc<AtomicUsize>,
     }
