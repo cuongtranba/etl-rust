@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use derive_builder::Builder;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,16 +33,20 @@ impl std::error::Error for BucketError {}
 // because BucketError implements std::error::Error trait.
 // No manual implementation needed!
 
-pub trait Processor<T> {
-    fn process(&self, cancel: &CancellationToken, items: &[T]) -> Result<(), BucketError>;
+#[async_trait]
+pub trait Processor<T>: Send + Sync {
+    async fn process(&self, cancel: &CancellationToken, items: &[T]) -> Result<(), BucketError>;
 }
 
-impl<T, F> Processor<T> for F
+#[async_trait]
+impl<T, F, Fut> Processor<T> for F
 where
-    F: Fn(&CancellationToken, &[T]) -> Result<(), BucketError>,
+    F: Fn(&CancellationToken, &[T]) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = Result<(), BucketError>> + Send,
+    T: Send + Sync,
 {
-    fn process(&self, ctx: &CancellationToken, items: &[T]) -> Result<(), BucketError> {
-        self(ctx, items)
+    async fn process(&self, ctx: &CancellationToken, items: &[T]) -> Result<(), BucketError> {
+        self(ctx, items).await
     }
 }
 
@@ -159,12 +164,12 @@ where
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     println!("Worker {} shutting down", worker_id);
-                    return Self::process_queue(cancel_token, &*process, &mut queue);
+                    return Self::process_queue(cancel_token, &*process, &mut queue).await;
                 }
 
                 _ = ticker.tick() => {
                     if !queue.is_empty() {
-                        Self::process_queue(cancel_token, &*process, &mut queue)?;
+                        Self::process_queue(cancel_token, &*process, &mut queue).await?;
                     }
                 }
 
@@ -177,12 +182,12 @@ where
                             queue.push(item);
 
                             if queue.len() >= batch_size {
-                                Self::process_queue(cancel_token, &*process, &mut queue)?;
+                                Self::process_queue(cancel_token, &*process, &mut queue).await?;
                             }
                         }
                         None => {
                             println!("Worker {} channel closed", worker_id);
-                            return Self::process_queue(cancel_token, &*process, &mut queue);
+                            return Self::process_queue(cancel_token, &*process, &mut queue).await;
                         }
                     }
                 }
@@ -190,7 +195,7 @@ where
         }
     }
 
-    fn process_queue<P>(
+    async fn process_queue<P>(
         ctx: &CancellationToken,
         process: &P,
         queue: &mut Vec<T>,
@@ -199,9 +204,12 @@ where
         P: Processor<T>,
     {
         if !queue.is_empty() {
-            process.process(ctx, queue)?;
+            process.process(ctx, queue).await?;
             queue.clear();
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
