@@ -65,7 +65,7 @@ pub struct Config {
 
 pub struct Bucket<T> {
     config: Arc<Config>,
-    sender: mpsc::Sender<T>,
+    sender: Arc<tokio::sync::Mutex<Option<mpsc::Sender<T>>>>,
     receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<T>>>,
 }
 
@@ -88,13 +88,23 @@ where
 
         Self {
             config,
-            sender,
+            sender: Arc::new(tokio::sync::Mutex::new(Some(sender))),
             receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
         }
     }
 
     pub async fn consume(&self, item: T) -> Result<(), mpsc::error::SendError<T>> {
-        self.sender.send(item).await
+        let sender_guard = self.sender.lock().await;
+        if let Some(sender) = sender_guard.as_ref() {
+            sender.send(item).await
+        } else {
+            Err(mpsc::error::SendError(item))
+        }
+    }
+
+    pub async fn close(&self) {
+        let mut sender_guard = self.sender.lock().await;
+        *sender_guard = None; // Drop the sender to close the channel
     }
 
     pub async fn run<P>(&self, cancel: &CancellationToken, process: P) -> Result<(), BucketError>

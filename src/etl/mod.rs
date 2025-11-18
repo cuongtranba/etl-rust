@@ -49,57 +49,62 @@ where
     ) -> Result<(), Box<dyn Error>> {
         let bucket = Bucket::new(config);
         let bucket_clone = bucket.clone();
+        let etl_clone = Arc::clone(&self.etl);
         let cancel_clone = cancel.clone();
-        let mut receiver = self.etl.extract(&cancel).await?;
 
-        let extract_handle = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = cancel_clone.cancelled() => {
-                        break;
-                    },
-                    item = receiver.recv() => {
-                        match item {
-                            Some(item) => {
-                                bucket_clone.consume(item).await?;
-                            },
-                            None => {
-                                break;
-                            },
+        let process_handle = tokio::spawn(async move {
+            bucket_clone
+                .run(
+                    &cancel_clone,
+                    move |ctx: &CancellationToken, items: &[E]| {
+                        let etl = Arc::clone(&etl_clone);
+                        let items = items.to_vec();
+                        let ctx = ctx.clone();
+
+                        async move {
+                            let transform_futures =
+                                items.iter().map(|item| etl.transform(&ctx, item.clone()));
+
+                            let transforms: Vec<T> = join_all(transform_futures).await;
+
+                            etl.load(&ctx, transforms)
+                                .await
+                                .map_err(|e| BucketError::ProcessorError(e.to_string()))
                         }
+                    },
+                )
+                .await
+        });
+
+        let mut receiver = self.etl.extract(&cancel).await?;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    break;
+                },
+                item = receiver.recv() => {
+                    match item {
+                        Some(item) => {
+                            bucket.consume(item).await
+                                .map_err(|e| Box::new(e) as Box<dyn Error>)?;
+                        },
+                        None => {
+                            break;
+                        },
                     }
                 }
             }
-            Ok::<(), Box<dyn Error + Send + Sync>>(())
-        });
+        }
 
-        let etl_clone = Arc::clone(&self.etl);
+        // Close the bucket channel to signal workers to finish
+        bucket.close().await;
 
-        bucket
-            .run(&cancel, move |ctx: &CancellationToken, items: &[E]| {
-                let etl = Arc::clone(&etl_clone);
-                let items = items.to_vec();
-                let ctx = ctx.clone();
-
-                async move {
-                    let transform_futures =
-                        items.iter().map(|item| etl.transform(&ctx, item.clone()));
-
-                    let transforms: Vec<T> = join_all(transform_futures).await;
-
-                    etl.load(&ctx, transforms)
-                        .await
-                        .map_err(|e| BucketError::ProcessorError(e.to_string()))
-                }
-            })
-            .await?;
-
-        let extract_result = extract_handle
+        let process_result = process_handle
             .await
             .map_err(|e| Box::new(e) as Box<dyn Error>)?;
 
-        if let Err(e) = extract_result {
-            return Err(format!("Extract task failed: {}", e).into());
+        if let Err(e) = process_result {
+            return Err(Box::new(e) as Box<dyn Error>);
         }
 
         self.post_process(cancel).await?;
