@@ -1,6 +1,6 @@
+use flume::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
@@ -10,8 +10,8 @@ use super::types::BucketError;
 
 pub struct Bucket<T> {
     config: Arc<Config>,
-    sender: Arc<mpsc::Sender<T>>,
-    receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+    sender: Sender<T>,
+    receiver: Receiver<T>,
     done: CancellationToken,
 }
 
@@ -31,12 +31,12 @@ where
     T: Send + 'static,
 {
     pub fn new(config: Arc<Config>) -> Self {
-        let (sender, receiver) = mpsc::channel(config.batch_size);
+        let (sender, receiver) = flume::bounded(config.batch_size);
 
         Self {
             config,
-            sender: Arc::new(sender),
-            receiver: Arc::new(Mutex::new(receiver)),
+            sender,
+            receiver,
             done: CancellationToken::new(),
         }
     }
@@ -47,7 +47,7 @@ where
         }
 
         self.sender
-            .send(item)
+            .send_async(item)
             .await
             .map_err(|err| BucketError::ConsumerError(err.to_string()))
     }
@@ -65,12 +65,12 @@ where
         let mut handles = Vec::new();
 
         for worker_id in 0..self.config.worker_num {
-            let receiver = self.receiver.clone();
             let process = process.clone();
             let cancel_token = cancel.clone();
             let batch_size = self.config.batch_size;
             let timeout = self.config.timeout;
             let done_token = self.done.clone();
+            let receiver = self.receiver.clone();
 
             let handle = tokio::spawn(async move {
                 Self::worker(
@@ -107,7 +107,7 @@ where
 
     async fn worker<P>(
         worker_id: usize,
-        receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+        receiver: Receiver<T>,
         process: Arc<P>,
         cancel_token: &CancellationToken,
         done_token: &CancellationToken,
@@ -140,19 +140,16 @@ where
                     }
                 }
 
-                item = async {
-                    let mut rx = receiver.lock().await;
-                    rx.recv().await
-                } => {
-                    match item {
-                        Some(item) => {
+                result = receiver.recv_async() => {
+                    match result {
+                        Ok(item) => {
                             queue.push(item);
 
                             if queue.len() >= batch_size {
                                 Self::process_queue(cancel_token, &*process, &mut queue).await?;
                             }
                         }
-                        None => {
+                        Err(_) => {
                             println!("Worker {} channel closed", worker_id);
                             return Self::process_queue(cancel_token, &*process, &mut queue).await;
                         }
@@ -162,7 +159,7 @@ where
         }
     }
     async fn drain_and_process<P>(
-        receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+        receiver: Receiver<T>,
         ctx: &CancellationToken,
         process: &P,
         queue: &mut Vec<T>,
@@ -172,19 +169,10 @@ where
         P: Processor<T>,
     {
         Self::process_queue(ctx, process, queue).await?;
-        loop {
-            let item = {
-                let mut rx = receiver.lock().await;
-                rx.try_recv().ok()
-            };
-            match item {
-                Some(item) => {
-                    queue.push(item);
-                    if queue.len() >= batch_size {
-                        Self::process_queue(ctx, process, queue).await?;
-                    }
-                }
-                None => break,
+        while let Ok(item) = receiver.try_recv() {
+            queue.push(item);
+            if queue.len() >= batch_size {
+                Self::process_queue(ctx, process, queue).await?;
             }
         }
         Self::process_queue(ctx, process, queue).await
