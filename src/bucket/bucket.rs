@@ -1,4 +1,5 @@
 use flume::{Receiver, Sender};
+use futures::future::try_join_all;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
@@ -126,46 +127,35 @@ where
         P: BatchProcessor<T> + Send + Sync + 'static,
     {
         let process = Arc::new(process);
-        let mut handles = Vec::new();
+        let handles: Vec<_> = (0..self.config.worker_num)
+            .map(|worker_id| {
+                let process = process.clone();
+                let cancel_token = cancel.clone();
+                let batch_size = self.config.batch_size;
+                let timeout = self.config.timeout;
+                let done_token = self.done.clone();
+                let receiver = self.receiver.clone();
 
-        for worker_id in 0..self.config.worker_num() {
-            let process = process.clone();
-            let cancel_token = cancel.clone();
-            let batch_size = self.config.batch_size();
-            let timeout = self.config.timeout();
-            let done_token = self.done.clone();
-            let receiver = self.receiver.clone();
+                tokio::spawn(async move {
+                    Self::worker(
+                        worker_id,
+                        receiver,
+                        process,
+                        &cancel_token,
+                        &done_token,
+                        batch_size,
+                        timeout,
+                    )
+                    .await
+                })
+            })
+            .collect();
 
-            let handle = tokio::spawn(async move {
-                Self::worker(
-                    worker_id,
-                    receiver,
-                    process,
-                    &cancel_token,
-                    &done_token,
-                    batch_size,
-                    timeout,
-                )
-                .await
-            });
+        let results = try_join_all(handles)
+            .await
+            .map_err(|e| BucketError::ProcessorError(e.to_string()))?;
 
-            handles.push(handle);
-        }
-
-        // Spawn workers to process batches
-        let mut errors = Vec::new();
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => errors.push(e),
-                Err(e) => errors.push(BucketError::ProcessorError(Box::new(e))),
-            }
-        }
-
-        if !errors.is_empty() {
-            return Err(BucketError::MultipleErrors(errors));
-        }
-
+        results.into_iter().find(|r| r.is_err()).transpose()?;
         Ok(())
     }
 
