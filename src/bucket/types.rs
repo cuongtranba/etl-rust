@@ -3,6 +3,7 @@ pub enum BucketError {
     ProcessorError(String),
     ChannelClosed,
     Cancelled,
+    ConsumerError(String),
 }
 
 impl std::fmt::Display for BucketError {
@@ -11,6 +12,7 @@ impl std::fmt::Display for BucketError {
             BucketError::ProcessorError(msg) => write!(f, "ProcessorError: {}", msg),
             BucketError::ChannelClosed => write!(f, "ChannelClosed"),
             BucketError::Cancelled => write!(f, "Cancelled"),
+            BucketError::ConsumerError(msg) => write!(f, "ConsumerError: {}", msg),
         }
     }
 }

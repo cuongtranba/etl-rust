@@ -41,8 +41,15 @@ where
         }
     }
 
-    pub async fn consume(&self, item: T) -> Result<(), mpsc::error::SendError<T>> {
-        self.sender.send(item).await
+    pub async fn consume(&self, cancel: &CancellationToken, item: T) -> Result<(), BucketError> {
+        if cancel.is_cancelled() {
+            return Err(BucketError::Cancelled);
+        }
+
+        self.sender
+            .send(item)
+            .await
+            .map_err(|err| BucketError::ConsumerError(err.to_string()))
     }
 
     pub fn close(&self) {
@@ -223,6 +230,23 @@ mod tests {
             Ok(())
         }
     }
+    struct CollectingProcessorDelayed {
+        items: Arc<tokio::sync::Mutex<Vec<i32>>>,
+    }
+
+    #[async_trait]
+    impl Processor<i32> for CollectingProcessorDelayed {
+        async fn process(
+            &self,
+            _ctx: &CancellationToken,
+            items: &[i32],
+        ) -> Result<(), BucketError> {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let mut collected = self.items.lock().await;
+            collected.extend_from_slice(items);
+            Ok(())
+        }
+    }
 
     // Processor that counts processed items
     struct CountingProcessor {
@@ -330,10 +354,10 @@ mod tests {
         let processor = CollectingProcessor {
             items: Arc::clone(&result),
         };
-
+        let cancel_clone = cancel.clone();
         tokio::spawn(async move {
             for i in 0..ITEM_NUMS {
-                bucket_clone.consume(i as i32).await.unwrap();
+                bucket_clone.consume(&cancel_clone, i as i32).await.unwrap();
             }
             bucket_clone.close();
         });
@@ -349,5 +373,48 @@ mod tests {
         for i in 0..ITEM_NUMS {
             assert_eq!(items[i], i as i32);
         }
+    }
+    #[tokio::test]
+    async fn test_should_process_full_with_cancel() {
+        let config = Arc::new(Config {
+            batch_size: 4,
+            timeout: Duration::from_millis(100),
+            worker_num: 4,
+        });
+
+        let bucket: Bucket<i32> = Bucket::new(config);
+        let bucket_clone = bucket.clone();
+        let cancel = CancellationToken::new();
+
+        let result = Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(ITEM_NUMS)));
+        let processor = CollectingProcessorDelayed {
+            items: Arc::clone(&result),
+        };
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            for i in 0..ITEM_NUMS {
+                if bucket_clone.consume(&cancel_clone, i as i32).await.is_err() {
+                    break;
+                }
+            }
+            bucket_clone.close();
+        });
+
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_secs(3)).await;
+            cancel_clone.cancel();
+        });
+
+        let run_result = bucket.run(&cancel, processor).await;
+        assert!(run_result.is_ok());
+
+        let items = result.lock().await;
+        println!("Processed {} items before cancellation", items.len());
+        assert!(items.len() > 0, "Should have processed at least some items");
+        assert!(
+            items.len() <= ITEM_NUMS,
+            "Should not process more items than sent"
+        );
     }
 }

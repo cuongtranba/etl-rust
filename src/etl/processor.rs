@@ -85,7 +85,7 @@ where
                 item = receiver.recv() => {
                     match item {
                         Some(item) => {
-                            bucket.consume(item).await
+                            bucket.consume(&cancel, item).await
                                 .map_err(|e| Box::new(e) as Box<dyn Error>)?;
                         },
                         None => {
