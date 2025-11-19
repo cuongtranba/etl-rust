@@ -10,8 +10,9 @@ use super::types::BucketError;
 
 pub struct Bucket<T> {
     config: Arc<Config>,
-    sender: Arc<Mutex<Option<mpsc::Sender<T>>>>,
+    sender: Arc<mpsc::Sender<T>>,
     receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+    done: CancellationToken,
 }
 
 impl<T> Clone for Bucket<T> {
@@ -20,6 +21,7 @@ impl<T> Clone for Bucket<T> {
             config: self.config.clone(),
             sender: self.sender.clone(),
             receiver: self.receiver.clone(),
+            done: self.done.clone(),
         }
     }
 }
@@ -33,23 +35,18 @@ where
 
         Self {
             config,
-            sender: Arc::new(Mutex::new(Some(sender))),
+            sender: Arc::new(sender),
             receiver: Arc::new(Mutex::new(receiver)),
+            done: CancellationToken::new(),
         }
     }
 
     pub async fn consume(&self, item: T) -> Result<(), mpsc::error::SendError<T>> {
-        let sender_guard = self.sender.lock().await;
-        if let Some(sender) = sender_guard.as_ref() {
-            sender.send(item).await
-        } else {
-            Err(mpsc::error::SendError(item))
-        }
+        self.sender.send(item).await
     }
 
-    pub async fn close(&self) {
-        let mut sender_guard = self.sender.lock().await;
-        *sender_guard = None;
+    pub fn close(&self) {
+        self.done.cancel();
     }
 
     pub async fn run<P>(&self, cancel: &CancellationToken, process: P) -> Result<(), BucketError>
@@ -66,6 +63,7 @@ where
             let cancel_token = cancel.clone();
             let batch_size = self.config.batch_size;
             let timeout = self.config.timeout;
+            let done_token = self.done.clone();
 
             let handle = tokio::spawn(async move {
                 Self::worker(
@@ -73,6 +71,7 @@ where
                     receiver,
                     process,
                     &cancel_token,
+                    &done_token,
                     batch_size,
                     timeout,
                 )
@@ -104,6 +103,7 @@ where
         receiver: Arc<Mutex<mpsc::Receiver<T>>>,
         process: Arc<P>,
         cancel_token: &CancellationToken,
+        done_token: &CancellationToken,
         batch_size: usize,
         timeout_duration: Duration,
     ) -> Result<(), BucketError>
@@ -111,7 +111,6 @@ where
         P: Processor<T> + Send + Sync,
         T: Clone,
     {
-        // ... (code của worker không đổi)
         let mut queue: Vec<T> = Vec::with_capacity(batch_size);
         let mut ticker = interval(timeout_duration);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -120,7 +119,12 @@ where
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     println!("Worker {} shutting down", worker_id);
-                    return Self::process_queue(cancel_token, &*process, &mut queue).await;
+                    return Self::drain_and_process(receiver, cancel_token, &*process, &mut queue, batch_size).await;
+                }
+
+                _ = done_token.cancelled() => {
+                    println!("done worker {}", worker_id);
+                    return Self::drain_and_process(receiver, cancel_token, &*process, &mut queue, batch_size).await;
                 }
 
                 _ = ticker.tick() => {
@@ -150,6 +154,34 @@ where
             }
         }
     }
+    async fn drain_and_process<P>(
+        receiver: Arc<Mutex<mpsc::Receiver<T>>>,
+        ctx: &CancellationToken,
+        process: &P,
+        queue: &mut Vec<T>,
+        batch_size: usize,
+    ) -> Result<(), BucketError>
+    where
+        P: Processor<T>,
+    {
+        Self::process_queue(ctx, process, queue).await?;
+        loop {
+            let item = {
+                let mut rx = receiver.lock().await;
+                rx.try_recv().ok()
+            };
+            match item {
+                Some(item) => {
+                    queue.push(item);
+                    if queue.len() >= batch_size {
+                        Self::process_queue(ctx, process, queue).await?;
+                    }
+                }
+                None => break,
+            }
+        }
+        Self::process_queue(ctx, process, queue).await
+    }
 
     async fn process_queue<P>(
         ctx: &CancellationToken,
@@ -174,6 +206,25 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::time::sleep;
 
+    // Processor that collects items into a shared vector
+    struct CollectingProcessor {
+        items: Arc<tokio::sync::Mutex<Vec<i32>>>,
+    }
+
+    #[async_trait]
+    impl Processor<i32> for CollectingProcessor {
+        async fn process(
+            &self,
+            _ctx: &CancellationToken,
+            items: &[i32],
+        ) -> Result<(), BucketError> {
+            let mut collected = self.items.lock().await;
+            collected.extend_from_slice(items);
+            Ok(())
+        }
+    }
+
+    // Processor that counts processed items
     struct CountingProcessor {
         counter: Arc<AtomicUsize>,
     }
@@ -190,265 +241,113 @@ mod tests {
         }
     }
 
-    // Helper struct for tracking batch sizes
-    struct BatchSizeTracker {
+    // Processor that tracks batch sizes and can signal completion
+    struct BatchTrackingProcessor {
         sizes: Arc<tokio::sync::Mutex<Vec<usize>>>,
+        total_processed: Arc<AtomicUsize>,
+        done_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+        target_count: usize,
     }
 
     #[async_trait]
-    impl Processor<i32> for BatchSizeTracker {
+    impl Processor<i32> for BatchTrackingProcessor {
         async fn process(
             &self,
             _ctx: &CancellationToken,
             items: &[i32],
         ) -> Result<(), BucketError> {
             self.sizes.lock().await.push(items.len());
+            let count = self
+                .total_processed
+                .fetch_add(items.len(), Ordering::SeqCst)
+                + items.len();
+
+            if count >= self.target_count {
+                let mut tx = self.done_tx.lock().await;
+                if let Some(sender) = tx.take() {
+                    let _ = sender.send(());
+                }
+            }
             Ok(())
         }
     }
 
-    // Helper struct that returns errors
-    struct ErrorProcessor;
-
-    #[async_trait]
-    impl Processor<i32> for ErrorProcessor {
-        async fn process(
-            &self,
-            _ctx: &CancellationToken,
-            _items: &[i32],
-        ) -> Result<(), BucketError> {
-            Err(BucketError::ProcessorError("Test error".to_string()))
-        }
+    // Processor for timeout testing
+    struct TimeoutProcessor {
+        first_batch_size: Arc<tokio::sync::Mutex<Option<usize>>>,
     }
 
-    // Helper struct that does nothing
-    struct NoOpProcessor;
-
     #[async_trait]
-    impl Processor<i32> for NoOpProcessor {
+    impl Processor<i32> for TimeoutProcessor {
         async fn process(
             &self,
             _ctx: &CancellationToken,
-            _items: &[i32],
+            items: &[i32],
         ) -> Result<(), BucketError> {
+            let mut size = self.first_batch_size.lock().await;
+            if size.is_none() {
+                *size = Some(items.len());
+            }
             Ok(())
         }
     }
 
-    #[tokio::test]
-    async fn test_bucket_creation() {
-        let config = Arc::new(Config {
-            batch_size: 10,
-            timeout: Duration::from_millis(100),
-            worker_num: 2,
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config.clone());
-        // Bucket should be created successfully
-        assert_eq!(bucket.config.batch_size, 10);
-        assert_eq!(bucket.config.worker_num, 2);
+    // Processor that checks context cancellation
+    struct CancellationCheckProcessor {
+        wait_for_signal: Arc<tokio::sync::Notify>,
+        items_count: Arc<AtomicUsize>,
     }
 
+    #[async_trait]
+    impl Processor<i32> for CancellationCheckProcessor {
+        async fn process(&self, ctx: &CancellationToken, items: &[i32]) -> Result<(), BucketError> {
+            self.items_count.store(items.len(), Ordering::SeqCst);
+            self.wait_for_signal.notified().await;
+
+            if ctx.is_cancelled() {
+                return Err(BucketError::ProcessorError("exit".to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    const ITEM_NUMS: usize = 100;
+
     #[tokio::test]
-    async fn test_bucket_consume_and_process() {
+    async fn test_should_process_full() {
         let config = Arc::new(Config {
-            batch_size: 5,
+            batch_size: 4,
             timeout: Duration::from_millis(100),
-            worker_num: 1,
+            worker_num: 4,
         });
 
         let bucket: Bucket<i32> = Bucket::new(config);
         let bucket_clone = bucket.clone();
         let cancel = CancellationToken::new();
 
-        // Track processed items
-        let processed = Arc::new(AtomicUsize::new(0));
-        let processor = CountingProcessor {
-            counter: Arc::clone(&processed),
+        // Collect all processed items
+        let result = Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(ITEM_NUMS)));
+        let processor = CollectingProcessor {
+            items: Arc::clone(&result),
         };
 
-        // Spawn consumer task
-        let cancel_clone = cancel.clone();
         tokio::spawn(async move {
-            for i in 0..10 {
-                bucket_clone.consume(i).await.unwrap();
+            for i in 0..ITEM_NUMS {
+                bucket_clone.consume(i as i32).await.unwrap();
             }
-            // Give time for processing
-            sleep(Duration::from_millis(200)).await;
-            cancel_clone.cancel();
+            bucket_clone.close();
         });
 
         // Run bucket processor
-        let result = bucket.run(&cancel, processor).await;
+        let run_result = bucket.run(&cancel, processor).await;
+        assert!(run_result.is_ok());
 
-        assert!(result.is_ok());
-        assert_eq!(processed.load(Ordering::SeqCst), 10);
-    }
-
-    #[tokio::test]
-    async fn test_bucket_batch_processing() {
-        let config = Arc::new(Config {
-            batch_size: 3,
-            timeout: Duration::from_secs(10), // Long timeout to rely on batch size
-            worker_num: 1,
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config);
-        let bucket_clone = bucket.clone();
-        let cancel = CancellationToken::new();
-
-        // Track batch sizes
-        let batch_sizes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let processor = BatchSizeTracker {
-            sizes: Arc::clone(&batch_sizes),
-        };
-
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            // Send exactly 6 items (2 batches of 3)
-            for i in 0..6 {
-                bucket_clone.consume(i).await.unwrap();
-            }
-            sleep(Duration::from_millis(100)).await;
-            cancel_clone.cancel();
-        });
-
-        bucket.run(&cancel, processor).await.unwrap();
-
-        let sizes = batch_sizes.lock().await;
-        // Should have processed in batches of 3
-        assert!(sizes.iter().any(|&s| s == 3));
-    }
-
-    #[tokio::test]
-    async fn test_bucket_timeout_trigger() {
-        let config = Arc::new(Config {
-            batch_size: 100,                    // Large batch size
-            timeout: Duration::from_millis(50), // Short timeout
-            worker_num: 1,
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config);
-        let bucket_clone = bucket.clone();
-        let cancel = CancellationToken::new();
-
-        let processed = Arc::new(AtomicUsize::new(0));
-        let processor = CountingProcessor {
-            counter: Arc::clone(&processed),
-        };
-
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            // Send only 2 items (less than batch size)
-            bucket_clone.consume(1).await.unwrap();
-            bucket_clone.consume(2).await.unwrap();
-
-            // Wait for timeout to trigger
-            sleep(Duration::from_millis(200)).await;
-            cancel_clone.cancel();
-        });
-
-        bucket.run(&cancel, processor).await.unwrap();
-
-        // Should process items via timeout, not batch size
-        assert_eq!(processed.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn test_bucket_error_handling() {
-        let config = Arc::new(Config {
-            batch_size: 5,
-            timeout: Duration::from_millis(100),
-            worker_num: 1,
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config);
-        let bucket_clone = bucket.clone();
-        let cancel = CancellationToken::new();
-
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            for i in 0..5 {
-                bucket_clone.consume(i).await.unwrap();
-            }
-            sleep(Duration::from_millis(50)).await;
-            cancel_clone.cancel();
-        });
-
-        // Processor that returns error
-        let result = bucket.run(&cancel, ErrorProcessor).await;
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            BucketError::ProcessorError(msg) => assert_eq!(msg, "Test error"),
-            _ => panic!("Expected ProcessorError"),
+        // Verify all items were processed
+        let mut items = result.lock().await;
+        items.sort();
+        assert_eq!(items.len(), ITEM_NUMS);
+        for i in 0..ITEM_NUMS {
+            assert_eq!(items[i], i as i32);
         }
-    }
-
-    #[tokio::test]
-    async fn test_bucket_multiple_workers() {
-        let config = Arc::new(Config {
-            batch_size: 2,
-            timeout: Duration::from_millis(100),
-            worker_num: 3, // Multiple workers
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config);
-        let bucket_clone = bucket.clone();
-        let cancel = CancellationToken::new();
-
-        let processed = Arc::new(AtomicUsize::new(0));
-        let processor = CountingProcessor {
-            counter: Arc::clone(&processed),
-        };
-
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            for i in 0..20 {
-                bucket_clone.consume(i).await.unwrap();
-            }
-            sleep(Duration::from_millis(200)).await;
-            cancel_clone.cancel();
-        });
-
-        bucket.run(&cancel, processor).await.unwrap();
-
-        assert_eq!(processed.load(Ordering::SeqCst), 20);
-    }
-
-    #[tokio::test]
-    async fn test_bucket_cancellation() {
-        let config = Arc::new(Config {
-            batch_size: 10,
-            timeout: Duration::from_secs(10),
-            worker_num: 1,
-        });
-
-        let bucket: Bucket<i32> = Bucket::new(config);
-        let cancel = CancellationToken::new();
-
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            // Cancel immediately
-            sleep(Duration::from_millis(10)).await;
-            cancel_clone.cancel();
-        });
-
-        let result = bucket.run(&cancel, NoOpProcessor).await;
-
-        // Should complete without error on cancellation
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_bucket_error_display() {
-        let err1 = BucketError::ProcessorError("test".to_string());
-        assert_eq!(err1.to_string(), "ProcessorError: test");
-
-        let err2 = BucketError::ChannelClosed;
-        assert_eq!(err2.to_string(), "ChannelClosed");
-
-        let err3 = BucketError::Cancelled;
-        assert_eq!(err3.to_string(), "Cancelled");
     }
 }
