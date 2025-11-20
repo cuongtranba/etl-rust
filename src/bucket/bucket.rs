@@ -153,7 +153,7 @@ where
 
         let results = try_join_all(handles)
             .await
-            .map_err(|e| BucketError::ProcessorError(e.to_string()))?;
+            .map_err(|e| BucketError::ProcessorError(Box::new(e)))?;
 
         results.into_iter().find(|r| r.is_err()).transpose()?;
         Ok(())
