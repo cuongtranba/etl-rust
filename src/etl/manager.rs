@@ -67,15 +67,15 @@ pub trait ETLRunner: Send + Sync {
 pub struct ETLPipelineManager {
     etl_runners: Vec<Arc<dyn ETLRunner + Send + Sync>>,
     cfg: Config,
-    bucket_config: Arc<bucket::Config>,
+    bucket_config: bucket::Config,  // Changed from Arc<bucket::Config>
 }
 
 impl ETLPipelineManager {
-    pub fn new(cfg: &Config, bucket_config: Arc<bucket::Config>) -> Self {
+    pub fn new(cfg: &Config, bucket_config: bucket::Config) -> Self {
         ETLPipelineManager {
             etl_runners: Vec::new(),
             cfg: cfg.clone(),
-            bucket_config,
+            bucket_config,  // Move instead of clone
         }
     }
 
