@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use derive_builder::Builder;
 // Remove std::sync::mpsc::channel import - using flume instead
@@ -85,12 +85,11 @@ impl ETLPipelineManager {
         &mut self,
         pipeline: Box<dyn ETLPipeline<E, T> + Send + Sync>,
         name: String,
-        config: bucket::Config,
     ) where
         E: Send + Sync + Clone + 'static,
         T: Send + 'static,
     {
-        let adapter = ETLPipelineAdapter::new(pipeline, name, config);
+        let adapter = ETLPipelineAdapter::new(pipeline, name);
         self.etl_runners.push(Arc::new(adapter));
     }
 
@@ -130,9 +129,9 @@ impl ETLPipelineManager {
 
 /// Adapter to make ETLPipeline<E, T> work with ETLRunner trait
 pub struct ETLPipelineAdapter<E, T> {
-    etl: Arc<ETL<E, T>>,
+    etl: ETL<E, T>,  // Direct storage, no Arc
     name: String,
-    config: bucket::Config,
+    // Removed: config field (use shared config from manager)
 }
 
 impl<E, T> ETLPipelineAdapter<E, T>
@@ -143,12 +142,10 @@ where
     pub fn new(
         pipeline: Box<dyn ETLPipeline<E, T> + Send + Sync>,
         name: String,
-        config: bucket::Config,
     ) -> Self {
         ETLPipelineAdapter {
-            etl: Arc::new(ETL::from_box(pipeline)),
+            etl: ETL::from_box(pipeline),
             name,
-            config,
         }
     }
 }
@@ -165,41 +162,26 @@ where
 
     async fn run(
         &self,
-        config: Arc<bucket::Config>,
+        config: &bucket::Config,  // Use shared config
         cancel: &CancellationToken,
-    ) -> Result<(), Box<dyn Error + Send>> {
-        let bucket_config = bucket::ConfigBuilder::default()
-            .batch_size(self.config.batch_size())
-            .timeout(self.config.timeout())
-            .worker_num(config.worker_num)
-            .build()
-            .map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    e.to_string(),
-                )) as Box<dyn Error + Send>
-            })?;
-
+    ) -> Result<(), ETLError> {
         // Run pre_process
         self.etl
             .pre_process(cancel)
             .await
-            .map_err(|e| -> Box<dyn Error + Send> {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| ETLError::PipelineExecution(self.name.clone(), e.to_string()))?;
 
+        // Run main ETL with Arc config (ETL::run requires Arc)
         self.etl
-            .run(Arc::new(bucket_config), cancel)
+            .run(Arc::new(config.clone()), cancel)
             .await
-            .map_err(|e| -> Box<dyn Error + Send> {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| ETLError::PipelineExecution(self.name.clone(), e.to_string()))?;
+
+        // Run post_process
+        self.etl
+            .post_process(cancel)
+            .await
+            .map_err(|e| ETLError::PipelineExecution(self.name.clone(), e.to_string()))?;
 
         Ok(())
     }
