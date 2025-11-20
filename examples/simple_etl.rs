@@ -6,7 +6,7 @@
 //! Run with: cargo run --example simple_etl
 
 use async_trait::async_trait;
-use etl_rust::etl::{ETLPipeline, ETL};
+use etl_rust::etl::{ETL, ETLPipeline};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -19,7 +19,10 @@ struct NumberSquaringPipeline {
 
 #[async_trait]
 impl ETLPipeline<i32, i32> for NumberSquaringPipeline {
-    async fn extract(&self, cancel: &CancellationToken) -> Result<mpsc::Receiver<i32>, Box<dyn Error>> {
+    async fn extract(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<mpsc::Receiver<i32>, Box<dyn Error>> {
         let (tx, rx) = mpsc::channel(100);
         let max = self.max_number;
         let cancel_clone = cancel.clone();
@@ -44,7 +47,11 @@ impl ETLPipeline<i32, i32> for NumberSquaringPipeline {
         item * item
     }
 
-    async fn load(&self, _cancel: &CancellationToken, items: Vec<i32>) -> Result<(), Box<dyn Error>> {
+    async fn load(
+        &self,
+        _cancel: &CancellationToken,
+        items: Vec<i32>,
+    ) -> Result<(), Box<dyn Error>> {
         // Print batch of squared numbers
         println!("Loaded batch of {} items:", items.len());
         for item in items {
@@ -82,7 +89,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .batch_size(5usize)
             .timeout(std::time::Duration::from_secs(1))
             .worker_num(2usize)
-            .build()?
+            .build()?,
     );
 
     // Run pipeline with cancellation support

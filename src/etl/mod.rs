@@ -42,7 +42,9 @@
 //! }
 //! ```
 
+pub mod manager;
 pub mod processor;
 
+pub use manager::ETLPipelineManager;
 pub use processor::ETL;
 pub use processor::ETLPipeline;
