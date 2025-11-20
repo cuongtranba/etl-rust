@@ -67,7 +67,7 @@ pub trait ETLRunner: Send + Sync {
 pub struct ETLPipelineManager {
     etl_runners: Vec<Arc<dyn ETLRunner + Send + Sync>>,
     cfg: Config,
-    bucket_config: bucket::Config,  // Changed from Arc<bucket::Config>
+    bucket_config: Arc<bucket::Config>,  // Arc for zero-copy sharing across tasks
 }
 
 impl ETLPipelineManager {
@@ -75,7 +75,7 @@ impl ETLPipelineManager {
         ETLPipelineManager {
             etl_runners: Vec::new(),
             cfg: cfg.clone(),
-            bucket_config,  // Move instead of clone
+            bucket_config: Arc::new(bucket_config),  // Wrap in Arc for sharing
         }
     }
 
@@ -105,7 +105,7 @@ impl ETLPipelineManager {
 
         for runner in &self.etl_runners {
             let runner = Arc::clone(runner);
-            let config = self.bucket_config.clone();  // Clone for move into spawned task
+            let config = Arc::clone(&self.bucket_config);  // Clone Arc pointer, not data
             let cancel = cancel.clone();
             let tx = tx.clone();
             let sem = Arc::clone(&semaphore);
