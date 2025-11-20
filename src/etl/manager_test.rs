@@ -184,3 +184,65 @@ async fn test_run_all_multiple_success() {
         assert!(runner.was_executed());
     }
 }
+
+#[tokio::test]
+async fn test_run_all_with_failure() {
+    let config = test_config(2);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    manager.add_runner(Arc::new(MockETLRunner::new("success")));
+    manager.add_runner(Arc::new(MockETLRunner::new("fail").with_failure()));
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, ETLError::PipelineExecution(_, _)));
+}
+
+#[tokio::test]
+async fn test_run_all_with_cancellation() {
+    let config = test_config(1);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add runner with delay to ensure cancellation happens during execution
+    manager.add_runner(Arc::new(MockETLRunner::new("delayed").with_delay(100)));
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_err());
+    if let Err(ETLError::Cancelled) = result {
+        // Expected
+    } else {
+        panic!("Expected cancellation error");
+    }
+}
+
+#[tokio::test]
+async fn test_run_all_parallel_execution() {
+    let config = test_config(3);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 3 runners with delays
+    for i in 1..=3 {
+        manager.add_runner(Arc::new(
+            MockETLRunner::new(format!("delayed{}", i)).with_delay(20)
+        ));
+    }
+
+    let cancel = CancellationToken::new();
+    let start = std::time::Instant::now();
+    let result = manager.run_all(&cancel).await;
+    let duration = start.elapsed();
+
+    assert!(result.is_ok());
+    // With 3 workers running in parallel, should take ~20ms, not 60ms
+    assert!(duration.as_millis() < 50);
+}
