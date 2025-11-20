@@ -21,6 +21,71 @@ fn test_bucket_config() -> bucket::Config {
         .unwrap()
 }
 
+// Simple mock ETLRunner for testing
+struct MockETLRunner {
+    name: String,
+    should_fail: bool,
+    delay_ms: u64,
+    executed: Arc<AtomicBool>,
+}
+
+impl MockETLRunner {
+    fn new(name: impl Into<String>) -> Self {
+        MockETLRunner {
+            name: name.into(),
+            should_fail: false,
+            delay_ms: 0,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn with_failure(mut self) -> Self {
+        self.should_fail = true;
+        self
+    }
+
+    fn with_delay(mut self, delay_ms: u64) -> Self {
+        self.delay_ms = delay_ms;
+        self
+    }
+
+    fn was_executed(&self) -> bool {
+        self.executed.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl ETLRunner for MockETLRunner {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn run(
+        &self,
+        _config: &bucket::Config,
+        cancel: &CancellationToken,
+    ) -> Result<(), ETLError> {
+        self.executed.store(true, Ordering::SeqCst);
+
+        if self.delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+        }
+
+        if cancel.is_cancelled() {
+            return Err(ETLError::Cancelled);
+        }
+
+        if self.should_fail {
+            Err(ETLError::PipelineExecution(
+                self.name.clone(),
+                "mock failure".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[test]
 fn test_config_creation() {
     let config = test_config(4);
@@ -40,4 +105,28 @@ fn test_manager_creation() {
     let manager = ETLPipelineManager::new(&config, bucket_config);
 
     assert_eq!(manager.etl_runners.len(), 0);
+}
+
+#[tokio::test]
+async fn test_mock_runner_success() {
+    let runner = MockETLRunner::new("test");
+    let config = test_bucket_config();
+    let cancel = CancellationToken::new();
+
+    let result = runner.run(&config, &cancel).await;
+
+    assert!(result.is_ok());
+    assert!(runner.was_executed());
+}
+
+#[tokio::test]
+async fn test_mock_runner_failure() {
+    let runner = MockETLRunner::new("test").with_failure();
+    let config = test_bucket_config();
+    let cancel = CancellationToken::new();
+
+    let result = runner.run(&config, &cancel).await;
+
+    assert!(result.is_err());
+    assert!(runner.was_executed());
 }
