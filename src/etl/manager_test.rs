@@ -1,8 +1,8 @@
 use super::*;
 use crate::etl::ETLPipeline;
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -291,7 +291,7 @@ async fn test_run_all_parallel_execution() {
     // Add 3 runners with delays
     for i in 1..=3 {
         manager.add_runner(Arc::new(
-            MockETLRunner::new(format!("delayed{}", i)).with_delay(20)
+            MockETLRunner::new(format!("delayed{}", i)).with_delay(20),
         ));
     }
 

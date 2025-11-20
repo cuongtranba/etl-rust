@@ -3,7 +3,7 @@
 //! Run with: cargo run --example simple_bucket
 
 use async_trait::async_trait;
-use etl_rust::bucket::{Bucket, BatchProcessor, BucketError, ConfigBuilder};
+use etl_rust::bucket::{BatchProcessor, Bucket, BucketError, ConfigBuilder};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .batch_size(10usize)
             .timeout(Duration::from_secs(1))
             .worker_num(2usize)
-            .build()?
+            .build()?,
     );
 
     let bucket: Bucket<i32> = Bucket::new(config);

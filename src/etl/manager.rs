@@ -59,15 +59,15 @@ pub trait ETLRunner: Send + Sync {
     fn name(&self) -> &str;
     async fn run(
         &self,
-        config: &bucket::Config,  // Changed from Arc to borrow
+        config: &bucket::Config, // Changed from Arc to borrow
         cancel: &CancellationToken,
-    ) -> Result<(), ETLError>;  // Changed from Box<dyn Error + Send>
+    ) -> Result<(), ETLError>; // Changed from Box<dyn Error + Send>
 }
 
 pub struct ETLPipelineManager {
     etl_runners: Vec<Arc<dyn ETLRunner + Send + Sync>>,
     cfg: Config,
-    bucket_config: Arc<bucket::Config>,  // Arc for zero-copy sharing across tasks
+    bucket_config: Arc<bucket::Config>, // Arc for zero-copy sharing across tasks
 }
 
 impl ETLPipelineManager {
@@ -75,7 +75,7 @@ impl ETLPipelineManager {
         ETLPipelineManager {
             etl_runners: Vec::new(),
             cfg: cfg.clone(),
-            bucket_config: Arc::new(bucket_config),  // Wrap in Arc for sharing
+            bucket_config: Arc::new(bucket_config), // Wrap in Arc for sharing
         }
     }
 
@@ -104,7 +104,7 @@ impl ETLPipelineManager {
 
         for runner in &self.etl_runners {
             let runner = Arc::clone(runner);
-            let config = Arc::clone(&self.bucket_config);  // Clone Arc pointer, not data
+            let config = Arc::clone(&self.bucket_config); // Clone Arc pointer, not data
             let cancel = cancel.clone();
             let tx = tx.clone();
             let sem = Arc::clone(&semaphore);
@@ -129,7 +129,7 @@ impl ETLPipelineManager {
 
 /// Adapter to make ETLPipeline<E, T> work with ETLRunner trait
 pub struct ETLPipelineAdapter<E, T> {
-    etl: ETL<E, T>,  // Direct storage, no Arc
+    etl: ETL<E, T>, // Direct storage, no Arc
     name: String,
     // Removed: config field (use shared config from manager)
 }
@@ -139,10 +139,7 @@ where
     E: Send + Sync + Clone + 'static,
     T: Send + 'static,
 {
-    pub fn new(
-        pipeline: Box<dyn ETLPipeline<E, T> + Send + Sync>,
-        name: String,
-    ) -> Self {
+    pub fn new(pipeline: Box<dyn ETLPipeline<E, T> + Send + Sync>, name: String) -> Self {
         ETLPipelineAdapter {
             etl: ETL::from_box(pipeline),
             name,
@@ -162,7 +159,7 @@ where
 
     async fn run(
         &self,
-        config: &bucket::Config,  // Use shared config
+        config: &bucket::Config, // Use shared config
         cancel: &CancellationToken,
     ) -> Result<(), ETLError> {
         // Run pre_process

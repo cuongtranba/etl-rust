@@ -322,6 +322,7 @@ mod tests {
     }
 
     // Processor that tracks batch sizes and can signal completion
+    #[allow(dead_code)]
     struct BatchTrackingProcessor {
         sizes: Arc<tokio::sync::Mutex<Vec<usize>>>,
         total_processed: Arc<AtomicUsize>,
@@ -353,6 +354,7 @@ mod tests {
     }
 
     // Processor for timeout testing
+    #[allow(dead_code)]
     struct TimeoutProcessor {
         first_batch_size: Arc<tokio::sync::Mutex<Option<usize>>>,
     }
@@ -373,6 +375,7 @@ mod tests {
     }
 
     // Processor that checks context cancellation
+    #[allow(dead_code)]
     struct CancellationCheckProcessor {
         wait_for_signal: Arc<tokio::sync::Notify>,
         items_count: Arc<AtomicUsize>,
@@ -480,6 +483,7 @@ mod tests {
     }
 
     // Test that Bucket works with non-cloneable types
+    #[allow(dead_code)]
     struct NonCloneable(i32);
 
     struct NonCloneableProcessor;

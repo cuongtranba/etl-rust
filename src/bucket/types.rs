@@ -53,10 +53,7 @@ mod tests {
 
     #[test]
     fn test_multiple_errors_display() {
-        let errors = vec![
-            BucketError::Cancelled,
-            BucketError::ChannelClosed,
-        ];
+        let errors = vec![BucketError::Cancelled, BucketError::ChannelClosed];
         let multi_err = BucketError::MultipleErrors(errors);
 
         let display = multi_err.to_string();
