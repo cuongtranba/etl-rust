@@ -59,9 +59,9 @@ pub trait ETLRunner: Send + Sync {
     fn name(&self) -> &str;
     async fn run(
         &self,
-        config: Arc<bucket::Config>,
+        config: &bucket::Config,  // Changed from Arc to borrow
         cancel: &CancellationToken,
-    ) -> Result<(), Box<dyn Error + Send>>;
+    ) -> Result<(), ETLError>;  // Changed from Box<dyn Error + Send>
 }
 
 pub struct ETLPipelineManager {
