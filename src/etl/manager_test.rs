@@ -338,3 +338,213 @@ async fn test_pipeline_execution() {
     assert_eq!(transform_check.load(Ordering::SeqCst), 3);
     assert_eq!(load_check.load(Ordering::SeqCst), 3);
 }
+
+#[tokio::test]
+async fn test_run_all_four_pipelines_concurrently() {
+    let config = test_config(4);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 4 different mock pipelines
+    let pipelines: Vec<_> = (1..=4)
+        .map(|_i| {
+            let pipeline = MockPipeline::new();
+            let extract_count = Arc::clone(&pipeline.extract_count);
+            let transform_count = Arc::clone(&pipeline.transform_count);
+            let load_count = Arc::clone(&pipeline.load_count);
+            (pipeline, extract_count, transform_count, load_count)
+        })
+        .collect();
+
+    let counters: Vec<_> = pipelines
+        .into_iter()
+        .enumerate()
+        .map(|(i, (pipeline, e, t, l))| {
+            manager.add_pipeline(Box::new(pipeline), format!("pipeline_{}", i + 1));
+            (e, t, l)
+        })
+        .collect();
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+
+    // Verify all 4 pipelines executed
+    for (i, (extract, transform, load)) in counters.iter().enumerate() {
+        assert_eq!(
+            extract.load(Ordering::SeqCst),
+            1,
+            "Pipeline {} extract count",
+            i + 1
+        );
+        assert_eq!(
+            transform.load(Ordering::SeqCst),
+            3,
+            "Pipeline {} transform count",
+            i + 1
+        );
+        assert_eq!(
+            load.load(Ordering::SeqCst),
+            3,
+            "Pipeline {} load count",
+            i + 1
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_run_all_five_mixed_runners() {
+    let config = test_config(5);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 3 ETL pipelines
+    let mut pipeline_counters = Vec::new();
+    for i in 1..=3 {
+        let pipeline = MockPipeline::new();
+        let extract_count = Arc::clone(&pipeline.extract_count);
+        let transform_count = Arc::clone(&pipeline.transform_count);
+        let load_count = Arc::clone(&pipeline.load_count);
+        pipeline_counters.push((extract_count, transform_count, load_count));
+        manager.add_pipeline(Box::new(pipeline), format!("pipeline_{}", i));
+    }
+
+    // Add 2 mock runners
+    let runner1 = Arc::new(MockETLRunner::new("runner_1"));
+    let runner2 = Arc::new(MockETLRunner::new("runner_2"));
+    let runner1_check = Arc::clone(&runner1);
+    let runner2_check = Arc::clone(&runner2);
+
+    manager.add_runner(runner1);
+    manager.add_runner(runner2);
+
+    let cancel = CancellationToken::new();
+    let start = std::time::Instant::now();
+    let result = manager.run_all(&cancel).await;
+    let duration = start.elapsed();
+
+    assert!(result.is_ok());
+
+    // Verify all 3 pipelines executed
+    for (i, (extract, transform, load)) in pipeline_counters.iter().enumerate() {
+        assert_eq!(extract.load(Ordering::SeqCst), 1, "Pipeline {} extract", i + 1);
+        assert_eq!(transform.load(Ordering::SeqCst), 3, "Pipeline {} transform", i + 1);
+        assert_eq!(load.load(Ordering::SeqCst), 3, "Pipeline {} load", i + 1);
+    }
+
+    // Verify both runners executed
+    assert!(runner1_check.was_executed(), "Runner 1 should execute");
+    assert!(runner2_check.was_executed(), "Runner 2 should execute");
+
+    // With 5 workers, should complete quickly (parallel execution)
+    assert!(duration.as_millis() < 2000, "Should complete in under 2s");
+}
+
+#[tokio::test]
+async fn test_run_all_five_pipelines_with_delays() {
+    let config = test_config(5);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 5 runners with varying delays
+    let delays = vec![50, 30, 40, 20, 10];
+    let runners: Vec<_> = delays
+        .iter()
+        .enumerate()
+        .map(|(i, &delay)| {
+            Arc::new(
+                MockETLRunner::new(format!("delayed_runner_{}", i + 1)).with_delay(delay)
+            )
+        })
+        .collect();
+
+    let runner_checks: Vec<_> = runners.iter().map(Arc::clone).collect();
+
+    for runner in runners {
+        manager.add_runner(runner);
+    }
+
+    let cancel = CancellationToken::new();
+    let start = std::time::Instant::now();
+    let result = manager.run_all(&cancel).await;
+    let duration = start.elapsed();
+
+    assert!(result.is_ok());
+
+    // Verify all 5 runners executed
+    for (i, runner) in runner_checks.iter().enumerate() {
+        assert!(runner.was_executed(), "Runner {} should execute", i + 1);
+    }
+
+    // With 5 workers running in parallel, should take ~50ms (max delay), not 150ms (sum)
+    assert!(
+        duration.as_millis() < 100,
+        "Should complete in under 100ms with parallel execution (was {}ms)",
+        duration.as_millis()
+    );
+}
+
+#[tokio::test]
+async fn test_run_all_four_pipelines_one_fails() {
+    let config = test_config(4);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 3 successful runners and 1 failing runner
+    manager.add_runner(Arc::new(MockETLRunner::new("success_1")));
+    manager.add_runner(Arc::new(MockETLRunner::new("success_2")));
+    manager.add_runner(Arc::new(MockETLRunner::new("fail").with_failure()));
+    manager.add_runner(Arc::new(MockETLRunner::new("success_3")));
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    // Should return error from the failing pipeline
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, ETLError::PipelineExecution(_, _)));
+}
+
+#[tokio::test]
+async fn test_run_all_mixed_four_pipelines_two_runners() {
+    let config = test_config(6);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    // Add 2 pipelines
+    let pipeline1 = MockPipeline::new();
+    let p1_extract = Arc::clone(&pipeline1.extract_count);
+    let p1_transform = Arc::clone(&pipeline1.transform_count);
+
+    let pipeline2 = MockPipeline::new();
+    let p2_extract = Arc::clone(&pipeline2.extract_count);
+    let p2_transform = Arc::clone(&pipeline2.transform_count);
+
+    manager.add_pipeline(Box::new(pipeline1), "etl_pipeline_1".to_string());
+    manager.add_pipeline(Box::new(pipeline2), "etl_pipeline_2".to_string());
+
+    // Add 2 mock runners
+    let runner1 = Arc::new(MockETLRunner::new("runner_1").with_delay(10));
+    let runner2 = Arc::new(MockETLRunner::new("runner_2").with_delay(15));
+    let r1_check = Arc::clone(&runner1);
+    let r2_check = Arc::clone(&runner2);
+
+    manager.add_runner(runner1);
+    manager.add_runner(runner2);
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+
+    // Verify pipelines executed
+    assert_eq!(p1_extract.load(Ordering::SeqCst), 1);
+    assert_eq!(p1_transform.load(Ordering::SeqCst), 3);
+    assert_eq!(p2_extract.load(Ordering::SeqCst), 1);
+    assert_eq!(p2_transform.load(Ordering::SeqCst), 3);
+
+    // Verify runners executed
+    assert!(r1_check.was_executed());
+    assert!(r2_check.was_executed());
+}
