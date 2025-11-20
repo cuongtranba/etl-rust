@@ -1,15 +1,17 @@
 # ETL-Rust
 
-A high-performance, async ETL (Extract, Transform, Load) library for Rust with batch processing and parallel worker support.
+A high-performance, concurrent ETL (Extract, Transform, Load) framework for Rust with batch processing, parallel workers, and zero-copy configuration sharing.
 
 ## Features
 
 - **Async/Await Support**: Built on Tokio for efficient async I/O operations
 - **Batch Processing**: Configurable batch sizes with automatic timeout-based flushing
 - **Parallel Workers**: Multi-threaded processing with configurable worker count
+- **ETL Pipeline Manager**: Run multiple ETL pipelines concurrently with zero-copy config sharing
 - **Cancellation Support**: Graceful shutdown using `CancellationToken`
 - **Flexible Architecture**: Trait-based design for custom ETL implementations
-- **Error Handling**: Comprehensive error handling with custom error types
+- **Builder Pattern**: Convenient configuration using derive_builder
+- **Error Handling**: Comprehensive error handling with custom error types (`ETLError`, `BucketError`)
 - **Type Safety**: Leverages Rust's type system for compile-time guarantees
 
 ## Installation
@@ -26,60 +28,55 @@ etl-rust = "0.1.0"
 ### Basic ETL Pipeline
 
 ```rust
-use etl_rust::etl::{ETL, Processor};
-use etl_rust::bucket::{Config, BucketError};
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use async_trait::async_trait;
+use etl_rust::etl::{ETL, ETLPipeline};
+use etl_rust::bucket::ConfigBuilder;
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-// Define your data types
 #[derive(Clone)]
-struct RawData {
+struct DataItem {
     id: u32,
     value: String,
 }
 
-struct ProcessedData {
-    id: u32,
-    processed_value: String,
-}
-
-// Implement the ETL processor
-struct MyETLProcessor;
+struct MyPipeline;
 
 #[async_trait]
-impl Processor<RawData, ProcessedData> for MyETLProcessor {
-    async fn extract(&self, cancel: &CancellationToken) -> Result<mpsc::Receiver<RawData>, Box<dyn Error>> {
+impl ETLPipeline<DataItem, String> for MyPipeline {
+    async fn extract(&self, cancel: &CancellationToken) -> Result<mpsc::Receiver<DataItem>, Box<dyn Error>> {
         let (tx, rx) = mpsc::channel(100);
+        let cancel_clone = cancel.clone();
 
-        // Spawn extraction task
         tokio::spawn(async move {
             for i in 0..100 {
-                if cancel.is_cancelled() {
+                if cancel_clone.is_cancelled() {
                     break;
                 }
-                tx.send(RawData {
+                if tx.send(DataItem {
                     id: i,
                     value: format!("data_{}", i),
-                }).await.unwrap();
+                }).await.is_err() {
+                    break;
+                }
             }
         });
 
         Ok(rx)
     }
 
-    async fn transform(&self, _cancel: &CancellationToken, item: RawData) -> ProcessedData {
-        ProcessedData {
-            id: item.id,
-            processed_value: item.value.to_uppercase(),
-        }
+    async fn transform(&self, _cancel: &CancellationToken, item: &DataItem) -> String {
+        format!("{}: {}", item.id, item.value.to_uppercase())
     }
 
-    async fn load(&self, _cancel: &CancellationToken, items: Vec<ProcessedData>) -> Result<(), Box<dyn Error>> {
+    async fn load(&self, _cancel: &CancellationToken, items: Vec<String>) -> Result<(), Box<dyn Error>> {
         println!("Loading batch of {} items", items.len());
-        // Implement your loading logic here
+        for item in items {
+            println!("  {}", item);
+        }
         Ok(())
     }
 
@@ -95,74 +92,126 @@ impl Processor<RawData, ProcessedData> for MyETLProcessor {
 }
 
 #[tokio::main]
-async fn main() {
-    let processor = Box::new(MyETLProcessor);
-    let etl = ETL::new(processor);
+async fn main() -> Result<(), Box<dyn Error>> {
+    let etl = ETL::from_box(Box::new(MyPipeline));
 
-    let config = Arc::new(Config {
-        batch_size: 10,
-        timeout: Duration::from_secs(5),
-        worker_num: 4,
-    });
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .batch_size(10usize)
+            .timeout(Duration::from_secs(5))
+            .worker_num(4usize)
+            .build()?
+    );
 
     let cancel = CancellationToken::new();
 
-    // Run the ETL pipeline
-    match etl.run(config, &cancel).await {
-        Ok(_) => println!("ETL completed successfully"),
-        Err(e) => eprintln!("ETL failed: {}", e),
-    }
+    etl.pre_process(&cancel).await?;
+    etl.run(config, &cancel).await?;
+    etl.post_process(&cancel).await?;
+
+    Ok(())
 }
 ```
 
 ### Using the Bucket System Directly
 
-The bucket system can also be used independently for batch processing:
-
 ```rust
-use etl_rust::bucket::{Bucket, Config, Processor, BucketError};
-use tokio_util::sync::CancellationToken;
 use async_trait::async_trait;
+use etl_rust::bucket::{Bucket, BatchProcessor, BucketError, ConfigBuilder};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 struct MyProcessor;
 
 #[async_trait]
-impl Processor<String> for MyProcessor {
-    async fn process(
-        &self,
-        _ctx: &CancellationToken,
-        items: &[String],
-    ) -> Result<(), BucketError> {
-        println!("Processing {} items", items.len());
+impl BatchProcessor<String> for MyProcessor {
+    async fn process(&self, _ctx: &CancellationToken, items: &[String]) -> Result<(), BucketError> {
+        println!("Processing {} items: {:?}", items.len(), items);
         Ok(())
     }
 }
 
 #[tokio::main]
-async fn main() {
-    let config = Config {
-        batch_size: 5,
-        timeout: Duration::from_secs(1),
-        worker_num: 2,
-    };
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = ConfigBuilder::default()
+        .batch_size(5usize)
+        .timeout(Duration::from_secs(1))
+        .worker_num(2usize)
+        .build()?;
 
     let bucket = Bucket::new(config);
     let cancel = CancellationToken::new();
 
-    // Start processing in background
     let bucket_clone = bucket.clone();
     let handle = tokio::spawn(async move {
         bucket_clone.run(&cancel, MyProcessor).await
     });
 
-    // Send items to bucket
     for i in 0..20 {
-        bucket.consume(format!("item_{}", i)).await.unwrap();
+        bucket.consume(format!("item_{}", i)).await?;
     }
 
-    // Signal completion
     bucket.close().await;
-    handle.await.unwrap().unwrap();
+    handle.await??;
+    
+    Ok(())
+}
+```
+
+### Running Multiple ETL Pipelines Concurrently
+
+```rust
+use async_trait::async_trait;
+use etl_rust::etl::{ETLPipeline, ETLPipelineManager};
+use etl_rust::bucket::ConfigBuilder;
+use std::error::Error;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+struct Pipeline1;
+
+#[async_trait]
+impl ETLPipeline<i32, String> for Pipeline1 {
+    async fn extract(&self, _cancel: &CancellationToken) -> Result<mpsc::Receiver<i32>, Box<dyn Error>> {
+        let (tx, rx) = mpsc::channel(100);
+        tokio::spawn(async move {
+            for i in 1..=10 {
+                let _ = tx.send(i).await;
+            }
+        });
+        Ok(rx)
+    }
+
+    async fn transform(&self, _cancel: &CancellationToken, item: &i32) -> String {
+        format!("Value: {}", item)
+    }
+
+    async fn load(&self, _cancel: &CancellationToken, items: Vec<String>) -> Result<(), Box<dyn Error>> {
+        println!("Pipeline1 loaded: {:?}", items);
+        Ok(())
+    }
+
+    async fn pre_process(&self, _cancel: &CancellationToken) -> Result<(), Box<dyn Error>> { Ok(()) }
+    async fn post_process(&self, _cancel: &CancellationToken) -> Result<(), Box<dyn Error>> { Ok(()) }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let manager_config = etl_rust::etl::manager::Config::new(4);
+    let bucket_config = ConfigBuilder::default()
+        .batch_size(5usize)
+        .timeout(Duration::from_secs(1))
+        .build()?;
+
+    let mut manager = ETLPipelineManager::new(&manager_config, bucket_config);
+    
+    manager.add_pipeline(Box::new(Pipeline1), "pipeline1".to_string());
+
+    let cancel = CancellationToken::new();
+    manager.run_all(&cancel).await?;
+
+    Ok(())
 }
 ```
 
@@ -170,66 +219,90 @@ async fn main() {
 
 ### Bucket Configuration
 
-The `Config` struct controls batch processing behavior:
+Configure batch processing using `ConfigBuilder`:
 
 ```rust
-pub struct Config {
-    /// Maximum number of items in a batch
-    pub batch_size: usize,
+use etl_rust::bucket::ConfigBuilder;
+use std::time::Duration;
 
-    /// Timeout duration for batch processing
-    /// If a batch doesn't fill up within this time, it will be processed anyway
-    pub timeout: Duration,
-
-    /// Number of parallel worker threads
-    pub worker_num: usize,
-}
+let config = ConfigBuilder::default()
+    .batch_size(100usize)
+    .timeout(Duration::from_secs(5))
+    .worker_num(4usize)
+    .build()?;
 ```
+
+**Parameters:**
+- `batch_size`: Maximum number of items in a batch (default: 1)
+- `timeout`: Maximum time to wait before processing a partial batch (default: 5 seconds)
+- `worker_num`: Number of concurrent worker tasks (default: 1)
+
+### ETL Manager Configuration
+
+Configure pipeline manager execution:
+
+```rust
+use etl_rust::etl::manager::Config;
+
+let config = Config::new(4);
+```
+
+**Parameters:**
+- `worker_num`: Maximum number of concurrent pipeline executions (default: 4)
 
 ### Configuration Guidelines
 
-- **batch_size**: Choose based on your processing requirements and memory constraints
-  - Smaller batches = lower latency, more overhead
-  - Larger batches = better throughput, higher memory usage
+- **batch_size**: Choose based on processing requirements and memory
+  - Smaller batches: lower latency, more overhead
+  - Larger batches: better throughput, higher memory usage
 
-- **timeout**: Prevents small batches from waiting too long
-  - Set lower for real-time processing
-  - Set higher for batch-oriented workloads
+- **timeout**: Prevents small batches from waiting indefinitely
+  - Lower for real-time processing
+  - Higher for batch-oriented workloads
 
-- **worker_num**: Number of parallel processors
+- **worker_num**: Number of parallel workers/pipelines
   - Set based on CPU cores and I/O characteristics
-  - I/O-bound tasks can benefit from more workers than CPU cores
+  - I/O-bound tasks benefit from more workers than CPU cores
 
 ## Architecture
 
 ### Components
 
 1. **ETL Module** (`src/etl/`)
-   - Orchestrates the complete ETL pipeline
-   - Manages extraction, transformation, and loading phases
-   - Provides lifecycle hooks (pre_process, post_process)
+   - `ETLPipeline` trait: Define extract, transform, load operations
+   - `ETL<E, T>`: Executor for single ETL pipelines
+   - `ETLPipelineManager`: Run multiple pipelines concurrently with zero-copy config sharing
+   - Lifecycle hooks: `pre_process`, `post_process`
 
 2. **Bucket Module** (`src/bucket/`)
-   - Handles batch processing and worker management
-   - Implements timeout-based and size-based batch triggers
-   - Manages parallel worker threads
+   - `Bucket<T>`: Generic batching processor with concurrent workers
+   - `BatchProcessor` trait: Define custom batch processing logic
+   - `Config`: Builder-based configuration for batch settings
+   - Timeout-based and size-based batch triggers
 
-3. **Processor Traits**
-   - `etl::Processor<E, T>`: Define ETL pipeline behavior
-   - `bucket::Processor<T>`: Define batch processing logic
+3. **Key Traits**
+   - `ETLPipeline<E, T>`: Define ETL pipeline behavior for types E → T
+   - `BatchProcessor<T>`: Define batch processing logic for type T
+   - `ETLRunner`: Low-level trait for custom pipeline execution
 
 ### Data Flow
 
 ```
-Extract → Channel → Transform (parallel) → Batch → Load
-                         ↑                    ↑
+ETL Pipeline:
+Extract → Channel → Transform (parallel) → Bucket → Load (batched)
+                         ↑                     ↑
                     Worker Pool          Timeout/Size
                                           Triggers
+
+ETL Manager:
+Multiple Pipelines → Semaphore → Concurrent Execution
+                         ↑
+                   Zero-Copy Config
 ```
 
 ## Error Handling
 
-The library provides custom error types:
+Custom error types for different components:
 
 ```rust
 pub enum BucketError {
@@ -237,35 +310,39 @@ pub enum BucketError {
     ChannelClosed,
     Cancelled,
 }
-```
 
-All errors are propagated through `Result` types for proper handling.
+pub enum ETLError {
+    PipelineExecution(String, String),
+    Configuration(String),
+    Cancelled,
+    WorkerPool(String),
+    Bucket(BucketError),
+    Io(std::io::Error),
+    BuildError(String),
+}
+```
 
 ## Testing
 
-Run the test suite:
-
 ```bash
 cargo test
-```
-
-Run tests with output:
-
-```bash
 cargo test -- --nocapture
-```
-
-Run specific tests:
-
-```bash
 cargo test test_bucket_batch_processing
 ```
 
 ## Examples
 
-Check the `tests` modules for more examples:
-- `src/bucket/bucket.rs` - Bucket system tests
-- `src/etl/tests.rs` - ETL pipeline tests
+See `examples/` directory:
+- `simple_etl.rs` - Basic single ETL pipeline
+- `simple_bucket.rs` - Direct bucket usage
+- `etl_with_manager.rs` - Multiple concurrent pipelines with ETLPipelineManager
+
+Run examples:
+```bash
+cargo run --example simple_etl
+cargo run --example simple_bucket
+cargo run --example etl_with_manager
+```
 
 ## Performance Considerations
 
@@ -285,8 +362,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Roadmap
 
 - [ ] Add metrics and monitoring support
-- [ ] Implement retry mechanisms
-- [ ] Add more transformation operators
+- [ ] Implement retry mechanisms with backoff strategies
+- [ ] Add more transformation operators and combinators
 - [ ] Support for distributed processing
-- [ ] Add compression and serialization options
-- [ ] Implement checkpoint/resume functionality
+- [ ] Compression and serialization options
+- [ ] Checkpoint/resume functionality
+- [ ] Rate limiting and throttling
+- [ ] Dead letter queue for failed items
