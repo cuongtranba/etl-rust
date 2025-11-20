@@ -162,6 +162,9 @@ where
             }
         }
 
+        // Signal bucket that no more items will be produced
+        bucket.close();
+
         let process_result = process_handle
             .await
             .map_err(|e| Box::new(e) as Box<dyn Error>)?;
