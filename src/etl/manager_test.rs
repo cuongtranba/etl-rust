@@ -86,6 +86,64 @@ impl ETLRunner for MockETLRunner {
     }
 }
 
+// Mock ETLPipeline for testing adapter
+struct MockPipeline {
+    extract_count: Arc<AtomicUsize>,
+    transform_count: Arc<AtomicUsize>,
+    load_count: Arc<AtomicUsize>,
+}
+
+impl MockPipeline {
+    fn new() -> Self {
+        MockPipeline {
+            extract_count: Arc::new(AtomicUsize::new(0)),
+            transform_count: Arc::new(AtomicUsize::new(0)),
+            load_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ETLPipeline<i32, String> for MockPipeline {
+    async fn extract(
+        &self,
+        _cancel: &CancellationToken,
+    ) -> Result<mpsc::Receiver<i32>, Box<dyn Error>> {
+        self.extract_count.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel(10);
+
+        tokio::spawn(async move {
+            for i in 1..=3 {
+                tx.send(i).await.ok();
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn transform(&self, _cancel: &CancellationToken, item: &i32) -> String {
+        self.transform_count.fetch_add(1, Ordering::SeqCst);
+        format!("item_{}", item)
+    }
+
+    async fn load(
+        &self,
+        _cancel: &CancellationToken,
+        items: Vec<String>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.load_count.fetch_add(items.len(), Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn pre_process(&self, _cancel: &CancellationToken) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
+    async fn post_process(&self, _cancel: &CancellationToken) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+}
+
 #[test]
 fn test_config_creation() {
     let config = test_config(4);
@@ -245,4 +303,38 @@ async fn test_run_all_parallel_execution() {
     assert!(result.is_ok());
     // With 3 workers running in parallel, should take ~20ms, not 60ms
     assert!(duration.as_millis() < 50);
+}
+
+#[tokio::test]
+async fn test_add_pipeline() {
+    let config = test_config(2);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    let pipeline = Box::new(MockPipeline::new());
+    manager.add_pipeline(pipeline, "test_pipeline".to_string());
+
+    assert_eq!(manager.etl_runners.len(), 1);
+}
+
+#[tokio::test]
+async fn test_pipeline_execution() {
+    let config = test_config(2);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    let pipeline = MockPipeline::new();
+    let extract_check = Arc::clone(&pipeline.extract_count);
+    let transform_check = Arc::clone(&pipeline.transform_count);
+    let load_check = Arc::clone(&pipeline.load_count);
+
+    manager.add_pipeline(Box::new(pipeline), "test_etl".to_string());
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+    assert_eq!(extract_check.load(Ordering::SeqCst), 1);
+    assert_eq!(transform_check.load(Ordering::SeqCst), 3);
+    assert_eq!(load_check.load(Ordering::SeqCst), 3);
 }
