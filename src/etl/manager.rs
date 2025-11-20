@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use derive_builder::Builder;
-use std::sync::mpsc::channel;
+// Remove std::sync::mpsc::channel import - using flume instead
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -99,28 +99,31 @@ impl ETLPipelineManager {
         self.etl_runners.push(runner);
     }
 
-    pub async fn run_all(&self, cancel: &CancellationToken) -> Result<(), Box<dyn Error + Send>> {
+    pub async fn run_all(&self, cancel: &CancellationToken) -> Result<(), ETLError> {
         let semaphore = Arc::new(Semaphore::new(self.cfg.worker_num));
-        let (tx, rx) = channel();
+        let (tx, rx) = flume::bounded(self.etl_runners.len());
 
         for runner in &self.etl_runners {
             let runner = Arc::clone(runner);
-            let config = Arc::clone(&self.bucket_config);
+            let config = self.bucket_config.clone();  // Clone for move into spawned task
             let cancel = cancel.clone();
             let tx = tx.clone();
             let sem = Arc::clone(&semaphore);
 
             tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let result = runner.run(config, &cancel).await;
-                let _ = tx.send(result);
+                let _permit = sem.acquire().await.expect("semaphore poisoned");
+                let result = runner.run(&config, &cancel).await;
+                let _ = tx.send_async(result).await;
             });
         }
 
         drop(tx);
-        for result in rx {
+
+        // Collect results
+        while let Ok(result) = rx.recv_async().await {
             result?;
         }
+
         Ok(())
     }
 }
