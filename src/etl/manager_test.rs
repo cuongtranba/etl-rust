@@ -130,3 +130,57 @@ async fn test_mock_runner_failure() {
     assert!(result.is_err());
     assert!(runner.was_executed());
 }
+
+#[tokio::test]
+async fn test_run_all_empty_manager() {
+    let config = test_config(2);
+    let bucket_config = test_bucket_config();
+    let manager = ETLPipelineManager::new(&config, bucket_config);
+    let cancel = CancellationToken::new();
+
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_run_all_single_success() {
+    let config = test_config(2);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    let runner = Arc::new(MockETLRunner::new("test1"));
+    let runner_check = Arc::clone(&runner);
+    manager.add_runner(runner);
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+    assert!(runner_check.was_executed());
+}
+
+#[tokio::test]
+async fn test_run_all_multiple_success() {
+    let config = test_config(3);
+    let bucket_config = test_bucket_config();
+    let mut manager = ETLPipelineManager::new(&config, bucket_config);
+
+    let runners: Vec<_> = (1..=3)
+        .map(|i| Arc::new(MockETLRunner::new(format!("test{}", i))))
+        .collect();
+
+    let runner_checks: Vec<_> = runners.iter().map(Arc::clone).collect();
+
+    for runner in runners {
+        manager.add_runner(runner);
+    }
+
+    let cancel = CancellationToken::new();
+    let result = manager.run_all(&cancel).await;
+
+    assert!(result.is_ok());
+    for runner in runner_checks {
+        assert!(runner.was_executed());
+    }
+}
