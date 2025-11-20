@@ -59,7 +59,7 @@ where
 /// * `E` - Type of extracted items
 /// * `T` - Type of transformed items
 pub struct ETL<E, T> {
-    pub etl: Arc<dyn ETLPipeline<E, T> + Send + Sync>,
+    etl: Arc<dyn ETLPipeline<E, T> + Send + Sync>,
 }
 
 impl<E, T> ETL<E, T>
@@ -72,9 +72,7 @@ where
     /// Accepts an Arc of a pipeline directly or can be extended
     /// to work with other types that can be converted to Arc.
     pub fn new(etl: Arc<dyn ETLPipeline<E, T> + Send + Sync>) -> Self {
-        ETL {
-            etl,
-        }
+        ETL { etl }
     }
 
     /// Creates a new ETL from a boxed pipeline implementation.
@@ -131,15 +129,13 @@ where
                                 .collect()
                                 .await;
 
-                            etl.load(&ctx, transforms)
-                                .await
-                                .map_err(|e| {
-                                    // Convert Box<dyn Error> to Box<dyn Error + Send + Sync>
-                                    let error_msg = e.to_string();
-                                    BucketError::ProcessorError(
-                                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg))
-                                    )
-                                })
+                            etl.load(&ctx, transforms).await.map_err(|e| {
+                                let error_msg = e.to_string();
+                                BucketError::ProcessorError(Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    error_msg,
+                                )))
+                            })
                         }
                     },
                 )
@@ -187,7 +183,10 @@ mod tests {
 
     #[async_trait]
     impl ETLPipeline<i32, String> for TestPipeline {
-        async fn extract(&self, _cancel: &CancellationToken) -> Result<Receiver<i32>, Box<dyn Error>> {
+        async fn extract(
+            &self,
+            _cancel: &CancellationToken,
+        ) -> Result<Receiver<i32>, Box<dyn Error>> {
             let (tx, rx) = mpsc::channel(10);
             drop(tx);
             Ok(rx)
@@ -197,7 +196,11 @@ mod tests {
             item.to_string()
         }
 
-        async fn load(&self, _cancel: &CancellationToken, _items: Vec<String>) -> Result<(), Box<dyn Error>> {
+        async fn load(
+            &self,
+            _cancel: &CancellationToken,
+            _items: Vec<String>,
+        ) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
 

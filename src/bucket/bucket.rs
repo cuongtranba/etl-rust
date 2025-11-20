@@ -266,9 +266,7 @@ mod tests {
 
     // Initialize tracing for tests
     fn init_tracing() {
-        let _ = tracing_subscriber::fmt()
-            .with_test_writer()
-            .try_init();
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     }
 
     // Processor that collects items into a shared vector
@@ -516,8 +514,14 @@ mod tests {
         let cancel_clone = cancel.clone();
 
         tokio::spawn(async move {
-            bucket_clone.consume(&cancel_clone, NonCloneable(1)).await.unwrap();
-            bucket_clone.consume(&cancel_clone, NonCloneable(2)).await.unwrap();
+            bucket_clone
+                .consume(&cancel_clone, NonCloneable(1))
+                .await
+                .unwrap();
+            bucket_clone
+                .consume(&cancel_clone, NonCloneable(2))
+                .await
+                .unwrap();
             bucket_clone.close();
         });
 
