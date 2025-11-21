@@ -106,7 +106,12 @@ impl ETLPipeline<String, String> for StringToUpperPipeline {
         _cancel: &CancellationToken,
         items: Vec<String>,
     ) -> Result<(), Box<dyn Error>> {
-        println!("[{}] Loaded {} uppercase items: {:?}", self.name, items.len(), items);
+        println!(
+            "[{}] Loaded {} uppercase items: {:?}",
+            self.name,
+            items.len(),
+            items
+        );
         Ok(())
     }
 
@@ -347,7 +352,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match manager.run_all(&cancel).await {
         Ok(_) => {
             let duration = start.elapsed();
-            println!("\n=== All 5 pipelines completed successfully in {:.2}s ===", duration.as_secs_f64());
+            println!(
+                "\n=== All 5 pipelines completed successfully in {:.2}s ===",
+                duration.as_secs_f64()
+            );
             Ok(())
         }
         Err(e) => {

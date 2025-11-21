@@ -5,11 +5,20 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+bson = { version = "2.15", features = ["chrono-0_4"] }
+chrono = "0.4"
 derive_builder = "0.20.2"
+dotenvy = "0.15.7"
 flume = "0.11.1"
 futures = "0.3.31"
+mongodb = "3.4.1"
+sea-orm = "1.1.19"
+sea-orm-migration = "1.1.19"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
 thiserror = "1.0"
 tokio = {version = "1.48.0", features = ["full"]}
+tokio-postgres = "0.7.15"
 tokio-util = "0.7.17"
 tracing = "0.1"
 workerpool = "1.2.1"

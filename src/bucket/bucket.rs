@@ -166,14 +166,16 @@ where
         cancel_token: &CancellationToken,
         done_token: &CancellationToken,
         batch_size: usize,
-        timeout_duration: Duration,
+        timeout_duration: Option<Duration>,
     ) -> Result<(), BucketError>
     where
         P: BatchProcessor<T> + Send + Sync,
     {
         let mut queue: Vec<T> = Vec::with_capacity(batch_size);
-        let mut ticker = interval(timeout_duration);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut ticker = timeout_duration.map(|d| interval(d));
+        ticker
+            .as_mut()
+            .map(|t| t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip));
 
         loop {
             tokio::select! {
@@ -187,11 +189,13 @@ where
                     return Self::drain_and_process(receiver, cancel_token, &*process, &mut queue, batch_size).await;
                 }
 
-                _ = ticker.tick() => {
-                    if !queue.is_empty() {
-                        Self::process_queue(cancel_token, &*process, &mut queue).await?;
-                    }
-                }
+                _ = async {
+                      ticker.as_mut().unwrap().tick().await
+                  }, if ticker.is_some() => {
+                      if !queue.is_empty() {
+                          Self::process_queue(cancel_token, &*process, &mut queue).await?;
+                      }
+                  }
 
                 result = receiver.recv_async() => {
                     match result {
@@ -394,7 +398,7 @@ mod tests {
         init_tracing();
         let config = Arc::new(Config {
             batch_size: 4,
-            timeout: Duration::from_millis(100),
+            timeout: None,
             worker_num: 4,
         });
 
@@ -432,7 +436,7 @@ mod tests {
         init_tracing();
         let config = Arc::new(Config {
             batch_size: 4,
-            timeout: Duration::from_millis(100),
+            timeout: Some(Duration::from_millis(100)),
             worker_num: 4,
         });
 
@@ -496,7 +500,7 @@ mod tests {
         init_tracing();
         let config = Arc::new(Config {
             batch_size: 2,
-            timeout: Duration::from_millis(100),
+            timeout: Some(Duration::from_millis(100)),
             worker_num: 1,
         });
 
@@ -529,7 +533,7 @@ mod tests {
 
         let config = Arc::new(Config {
             batch_size: 10,
-            timeout: Duration::from_millis(100),
+            timeout: Some(Duration::from_millis(100)),
             worker_num: 4,
         });
 
