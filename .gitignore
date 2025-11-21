@@ -1,2 +1,7 @@
 /target
 .worktrees/
+
+# Profiling files
+flamegraph.svg
+profile.pb
+profile.txt

@@ -9,6 +9,8 @@ dotenvy = "0.15.7"
 etl-rust = { path = ".." }
 futures = "0.3.31"
 mongodb = "3.4.1"
+num_cpus = "1.17.0"
+pprof = { version = "0.14", features = ["flamegraph", "criterion"] }
 sea-orm = { version = "1.1.19", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
 sea-orm-migration = "1.1.19"
 serde = { version = "1.0.228", features = ["derive"] }
