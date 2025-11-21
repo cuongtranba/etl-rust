@@ -639,7 +639,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let bucket_config = bucket::ConfigBuilder::default()
-        .batch_size(10usize)
+        .batch_size(100usize)
         .worker_num(2usize)
         .build()
         .unwrap();
