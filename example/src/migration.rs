@@ -28,8 +28,13 @@ impl MigratorTrait for Migrator {
 pub mod m20231121_000001_create_users_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000001_create_users_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -89,8 +94,13 @@ pub mod m20231121_000001_create_users_table {
 pub mod m20231121_000002_create_addresses_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000002_create_addresses_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -153,8 +163,13 @@ pub mod m20231121_000002_create_addresses_table {
 pub mod m20231121_000003_create_profiles_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000003_create_profiles_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -211,8 +226,13 @@ pub mod m20231121_000003_create_profiles_table {
 pub mod m20231121_000004_create_education_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000004_create_education_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -275,8 +295,13 @@ pub mod m20231121_000004_create_education_table {
 pub mod m20231121_000005_create_experience_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000005_create_experience_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -339,8 +364,13 @@ pub mod m20231121_000005_create_experience_table {
 pub mod m20231121_000006_create_preferences_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000006_create_preferences_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -397,8 +427,13 @@ pub mod m20231121_000006_create_preferences_table {
 pub mod m20231121_000007_create_settings_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000007_create_settings_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -448,8 +483,13 @@ pub mod m20231121_000007_create_settings_table {
 pub mod m20231121_000008_create_activity_log_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000008_create_activity_log_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -512,8 +552,13 @@ pub mod m20231121_000008_create_activity_log_table {
 pub mod m20231121_000009_create_transactions_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000009_create_transactions_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -580,8 +625,13 @@ pub mod m20231121_000009_create_transactions_table {
 pub mod m20231121_000010_create_messages_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000010_create_messages_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -647,8 +697,13 @@ pub mod m20231121_000010_create_messages_table {
 pub mod m20231121_000011_create_attachments_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000011_create_attachments_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -705,8 +760,13 @@ pub mod m20231121_000011_create_attachments_table {
 pub mod m20231121_000012_create_social_media_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000012_create_social_media_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -759,8 +819,13 @@ pub mod m20231121_000012_create_social_media_table {
 pub mod m20231121_000013_create_posts_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000013_create_posts_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -810,8 +875,13 @@ pub mod m20231121_000013_create_posts_table {
 pub mod m20231121_000014_create_groups_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000014_create_groups_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -857,8 +927,13 @@ pub mod m20231121_000014_create_groups_table {
 pub mod m20231121_000015_create_large_data_table {
     use sea_orm_migration::prelude::*;
 
-    #[derive(DeriveMigrationName)]
     pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m20231121_000015_create_large_data_table"
+        }
+    }
 
     #[async_trait::async_trait]
     impl MigrationTrait for Migration {
@@ -917,5 +992,8 @@ pub mod m20231121_000015_create_large_data_table {
 }
 
 pub async fn run_migrations(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+    use sea_orm_migration::MigratorTrait;
+
+    // Run migrations - this automatically installs tracking table and runs pending migrations
     Migrator::up(db, None).await
 }

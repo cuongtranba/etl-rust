@@ -484,83 +484,92 @@ impl ETLPipeline<MongoUser, TransformedUser> for UserETL {
             });
         }
 
-        // Perform batch inserts
+        // Perform batch inserts with error context
         println!("Batch inserting {} users...", all_users.len());
         users::Entity::insert_many(all_users)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to insert {} users: {}", items_count, e))?;
 
         println!("Batch inserting {} addresses...", all_addresses.len());
         addresses::Entity::insert_many(all_addresses)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to insert {} addresses: {}", items_count, e))?;
 
         println!("Batch inserting {} profiles...", all_profiles.len());
         profiles::Entity::insert_many(all_profiles)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to insert {} profiles: {}", items_count, e))?;
 
         if !all_education.is_empty() {
-            println!(
-                "Batch inserting {} education records...",
-                all_education.len()
-            );
+            let count = all_education.len();
+            println!("Batch inserting {} education records...", count);
             education::Entity::insert_many(all_education)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} education records: {}", count, e))?;
         }
 
         if !all_experience.is_empty() {
-            println!(
-                "Batch inserting {} experience records...",
-                all_experience.len()
-            );
+            let count = all_experience.len();
+            println!("Batch inserting {} experience records...", count);
             experience::Entity::insert_many(all_experience)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} experience records: {}", count, e))?;
         }
 
         println!("Batch inserting {} preferences...", all_preferences.len());
         preferences::Entity::insert_many(all_preferences)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to insert {} preferences: {}", items_count, e))?;
 
         if !all_settings.is_empty() {
-            println!("Batch inserting {} settings...", all_settings.len());
+            let count = all_settings.len();
+            println!("Batch inserting {} settings...", count);
             settings::Entity::insert_many(all_settings)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} settings: {}", count, e))?;
         }
 
         if !all_activity_log.is_empty() {
-            println!(
-                "Batch inserting {} activity logs...",
-                all_activity_log.len()
-            );
+            let count = all_activity_log.len();
+            println!("Batch inserting {} activity logs...", count);
             activity_log::Entity::insert_many(all_activity_log)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} activity logs: {}", count, e))?;
         }
 
         if !all_transactions.is_empty() {
-            println!("Batch inserting {} transactions...", all_transactions.len());
+            let count = all_transactions.len();
+            println!("Batch inserting {} transactions...", count);
             transactions::Entity::insert_many(all_transactions)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} transactions: {}", count, e))?;
         }
 
         if !all_messages.is_empty() {
-            println!("Batch inserting {} messages...", all_messages.len());
+            let count = all_messages.len();
+            println!("Batch inserting {} messages...", count);
             messages::Entity::insert_many(all_messages)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} messages: {}", count, e))?;
         }
 
         if !all_attachments.is_empty() {
-            println!("Batch inserting {} attachments...", all_attachments.len());
+            let count = all_attachments.len();
+            println!("Batch inserting {} attachments...", count);
             attachments::Entity::insert_many(all_attachments)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} attachments: {}", count, e))?;
         }
 
         println!(
@@ -569,20 +578,30 @@ impl ETLPipeline<MongoUser, TransformedUser> for UserETL {
         );
         social_media::Entity::insert_many(all_social_media)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to insert {} social media records: {}",
+                    items_count, e
+                )
+            })?;
 
         if !all_posts.is_empty() {
-            println!("Batch inserting {} posts...", all_posts.len());
+            let count = all_posts.len();
+            println!("Batch inserting {} posts...", count);
             posts::Entity::insert_many(all_posts)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} posts: {}", count, e))?;
         }
 
         if !all_groups.is_empty() {
-            println!("Batch inserting {} groups...", all_groups.len());
+            let count = all_groups.len();
+            println!("Batch inserting {} groups...", count);
             groups::Entity::insert_many(all_groups)
                 .exec(&self.postgres_client)
-                .await?;
+                .await
+                .map_err(|e| format!("Failed to insert {} groups: {}", count, e))?;
         }
 
         println!(
@@ -591,7 +610,8 @@ impl ETLPipeline<MongoUser, TransformedUser> for UserETL {
         );
         large_data::Entity::insert_many(all_large_data)
             .exec(&self.postgres_client)
-            .await?;
+            .await
+            .map_err(|e| format!("Failed to insert {} large data records: {}", items_count, e))?;
 
         println!(
             "✓ Batch inserted {} users with all related data!",
@@ -622,16 +642,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ETL with Database Example");
     println!("=========================\n");
 
-    let config = DbConfig::load()?;
+    let config = DbConfig::load().map_err(|e| {
+        format!(
+            "Failed to load database configuration: {}. Check your .env file.",
+            e
+        )
+    })?;
 
     println!("Connecting to databases...");
-    let mongodb_client = mongodb::Client::with_uri_str(&config.mongodb_url).await?;
-    let postgres_client = Database::connect(&config.postgres_url).await?;
+    let mongodb_client = mongodb::Client::with_uri_str(&config.mongodb_url)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to connect to MongoDB at {}: {}",
+                config.mongodb_url, e
+            )
+        })?;
+
+    let postgres_client = Database::connect(&config.postgres_url).await.map_err(|e| {
+        format!(
+            "Failed to connect to PostgreSQL at {}: {}",
+            config.postgres_url, e
+        )
+    })?;
     println!("Connected successfully!\n");
 
     println!("Running PostgreSQL migrations...");
-    migration::run_migrations(&postgres_client).await?;
-    println!("Migrations completed!\n");
+    migration::run_migrations(&postgres_client)
+        .await
+        .map_err(|e| format!("Failed to run database migrations: {}", e))?;
+    println!("✓ Migrations completed successfully!\n");
 
     let user_etl = UserETL {
         mongodb_client,
