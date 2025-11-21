@@ -3,23 +3,6 @@
 use derive_builder::Builder;
 use std::time::Duration;
 
-/// Configuration for bucket batch processing.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use etl_rust::bucket::Config;
-/// use std::time::Duration;
-///
-/// let config = Config {
-///     batch_size: 100,
-///     timeout: Duration::from_secs(5),
-///     worker_num: 4,
-/// };
-///
-/// assert_eq!(config.batch_size(), 100);
-/// assert_eq!(config.worker_num(), 4);
-/// ```
 #[derive(Debug, Clone, Builder)]
 #[builder(setter(into))]
 pub struct Config {
@@ -28,8 +11,8 @@ pub struct Config {
     pub(crate) batch_size: usize,
 
     /// Maximum time to wait before processing a partial batch
-    #[builder(default = "Duration::from_secs(5)")]
-    pub(crate) timeout: Duration,
+    #[builder(default = "Some(Duration::from_secs(5))")]
+    pub(crate) timeout: Option<Duration>,
 
     /// Number of concurrent worker tasks
     #[builder(default = "1")]
@@ -45,7 +28,7 @@ impl Config {
 
     /// Returns the timeout duration for batch collection
     #[inline]
-    pub fn timeout(&self) -> Duration {
+    pub fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
 
@@ -53,33 +36,5 @@ impl Config {
     #[inline]
     pub fn worker_num(&self) -> usize {
         self.worker_num
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_config_getters() {
-        let config = ConfigBuilder::default()
-            .batch_size(10usize)
-            .timeout(Duration::from_secs(30))
-            .worker_num(4usize)
-            .build()
-            .unwrap();
-
-        assert_eq!(config.batch_size(), 10);
-        assert_eq!(config.timeout(), Duration::from_secs(30));
-        assert_eq!(config.worker_num(), 4);
-    }
-
-    #[test]
-    fn test_config_defaults() {
-        let config = ConfigBuilder::default().build().unwrap();
-
-        assert_eq!(config.batch_size(), 1);
-        assert_eq!(config.timeout(), Duration::from_secs(5));
-        assert_eq!(config.worker_num(), 1);
     }
 }

@@ -1,0 +1,135 @@
+-- Create all tables for the ETL example
+
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT PRIMARY KEY,
+    username VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    first_name VARCHAR NOT NULL,
+    last_name VARCHAR NOT NULL,
+    age INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS addresses (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    street VARCHAR NOT NULL,
+    city VARCHAR NOT NULL,
+    state VARCHAR NOT NULL,
+    zip_code VARCHAR NOT NULL,
+    country VARCHAR NOT NULL,
+    coordinates JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bio VARCHAR NOT NULL,
+    interests JSONB NOT NULL,
+    skills JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS education (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    institution VARCHAR NOT NULL,
+    degree VARCHAR NOT NULL,
+    year INTEGER NOT NULL,
+    description VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS experience (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    company VARCHAR NOT NULL,
+    position VARCHAR NOT NULL,
+    duration VARCHAR NOT NULL,
+    description VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS preferences (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    language VARCHAR NOT NULL,
+    timezone VARCHAR NOT NULL,
+    notifications JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    id BIGINT PRIMARY KEY,
+    preference_id BIGINT NOT NULL REFERENCES preferences(id) ON DELETE CASCADE,
+    key VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    metadata VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS activity_log (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    metadata VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    metadata VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id VARCHAR PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    "from" VARCHAR NOT NULL,
+    "to" VARCHAR NOT NULL,
+    subject VARCHAR NOT NULL,
+    body VARCHAR NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    read BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id BIGINT PRIMARY KEY,
+    message_id VARCHAR NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    name VARCHAR NOT NULL,
+    size INTEGER NOT NULL,
+    file_type VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS social_media (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    connections JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS posts (
+    id BIGINT PRIMARY KEY,
+    social_media_id BIGINT NOT NULL REFERENCES social_media(id) ON DELETE CASCADE,
+    key VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    metadata VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+    id VARCHAR PRIMARY KEY,
+    social_media_id BIGINT NOT NULL REFERENCES social_media(id) ON DELETE CASCADE,
+    name VARCHAR NOT NULL,
+    joined TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS large_data (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blob1 VARCHAR NOT NULL,
+    blob2 VARCHAR NOT NULL,
+    blob3 VARCHAR NOT NULL,
+    blob4 VARCHAR NOT NULL,
+    blob5 VARCHAR NOT NULL
+);
