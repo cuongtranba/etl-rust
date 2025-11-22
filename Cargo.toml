@@ -16,6 +16,7 @@ dotenvy = "0.15.7"
 flume = "0.11.1"
 futures = "0.3.31"
 mongodb = "3.4.1"
+num_cpus = "1.16"
 sea-orm = "1.1.19"
 sea-orm-migration = "1.1.19"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -29,3 +30,13 @@ workerpool = "1.2.1"
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+rand = { version = "0.8", features = ["small_rng"] }
+
+[[bench]]
+name = "etl_streaming_benchmark"
+harness = false
+
+[[bench]]
+name = "etl_streaming_benchmark_optimized"
+harness = false

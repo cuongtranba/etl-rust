@@ -12,6 +12,7 @@ use mongodb_model::User as MongoUser;
 use postgres_model::*;
 use sea_orm::{Database, DatabaseConnection, EntityTrait, Set};
 use std::env;
+use std::fs::File;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -677,10 +678,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mongodb_client,
         postgres_client,
     };
-
+    let num_cpus = num_cpus::get();
     let bucket_config = bucket::ConfigBuilder::default()
-        .batch_size(100usize)
-        .worker_num(2usize)
+        .batch_size(500usize)
+        .worker_num(num_cpus * 2)
         .build()
         .unwrap();
 
@@ -691,7 +692,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Adding User ETL Pipeline (MongoDB -> PostgreSQL)");
     manager.add_pipeline(Box::new(user_etl), "user_migration_pipeline".to_string());
 
-    println!("\n--- Starting ETL pipeline ---\n");
+    println!("\n--- Starting ETL pipeline with profiling ---\n");
     let cancel_token = CancellationToken::new();
 
     let cancel_clone = cancel_token.clone();
@@ -701,22 +702,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cancel_clone.cancel();
     });
 
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(100)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .map_err(|e| format!("Failed to start profiler: {}", e))?;
+
     let start = std::time::Instant::now();
-    match manager.run_all(&cancel_token).await {
+    let result = manager.run_all(&cancel_token).await;
+    let duration = start.elapsed();
+
+    let is_success = result.is_ok();
+
+    match &result {
         Ok(_) => {
-            let duration = start.elapsed();
             println!(
                 "\n=== ETL process completed successfully in {:.2}s ===",
                 duration.as_secs_f64()
             );
-            Ok(())
         }
         Err(e) => {
             eprintln!("\n=== Error running pipeline: {} ===", e);
-            Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )) as Box<dyn std::error::Error>)
         }
     }
+
+    println!("\nGenerating profiling reports...");
+    if let Ok(report) = guard.report().build() {
+        let file = File::create("flamegraph.svg")
+            .map_err(|e| format!("Failed to create flamegraph file: {}", e))?;
+        report
+            .flamegraph(file)
+            .map_err(|e| format!("Failed to generate flamegraph: {}", e))?;
+        println!("✓ Flamegraph saved to: flamegraph.svg");
+
+        println!("\n=== Performance Metrics ===");
+        println!("Duration: {:.2}s", duration.as_secs_f64());
+        println!(
+            "Status: {}",
+            if is_success {
+                "✓ Success"
+            } else {
+                "✗ Failed"
+            }
+        );
+        println!("CPU Profiling: Enabled (100Hz sampling rate)");
+        println!("📊 Open flamegraph.svg in your browser for visual CPU profiling");
+        println!("   - Shows function call stacks and CPU time distribution");
+        println!("   - Wider bars = more CPU time spent");
+        println!("===========================\n");
+    }
+
+    result.map_err(|e| {
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        )) as Box<dyn std::error::Error>
+    })
 }

@@ -1,0 +1,73 @@
+warning: fields `username`, `email`, `age`, `location_id`, and `profile_bits` are never read
+  --> benches/etl_streaming_benchmark_optimized.rs:19:5
+   |
+17 | struct OptimizedMockUser {
+   |        ----------------- fields in this struct
+18 |     id: i64,
+19 |     username: Box<str>,  // Use Box<str> instead of String to save 8 bytes
+   |     ^^^^^^^^
+20 |     email: Box<str>,
+   |     ^^^^^
+21 |     age: u8,  // Use u8 instead of i32 for age
+   |     ^^^
+22 |     location_id: u16,  // Use location ID instead of full address
+   |     ^^^^^^^^^^^
+23 |     profile_bits: u64,  // Pack profile data into bitfield
+   |     ^^^^^^^^^^^^
+   |
+   = note: `OptimizedMockUser` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `user_id`, `display_name`, and `metrics` are never read
+  --> benches/etl_streaming_benchmark_optimized.rs:35:5
+   |
+34 | struct OptimizedTransformedUser {
+   |        ------------------------ fields in this struct
+35 |     user_id: i64,
+   |     ^^^^^^^
+36 |     display_name: Box<str>,
+   |     ^^^^^^^^^^^^
+37 |     metrics: UserMetrics,
+   |     ^^^^^^^
+   |
+   = note: `OptimizedTransformedUser` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `total_activities`, `engagement_score`, and `data_fingerprint` are never read
+  --> benches/etl_streaming_benchmark_optimized.rs:42:5
+   |
+41 | struct UserMetrics {
+   |        ----------- fields in this struct
+42 |     total_activities: u32,
+   |     ^^^^^^^^^^^^^^^^
+43 |     engagement_score: f32,
+   |     ^^^^^^^^^^^^^^^^
+44 |     data_fingerprint: u64,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `UserMetrics` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: static `LOCATIONS` is never used
+  --> benches/etl_streaming_benchmark_optimized.rs:48:8
+   |
+48 | static LOCATIONS: &[(&str, &str, &str)] = &[
+   |        ^^^^^^^^^
+
+warning: function `optimal_config_for_memory` is never used
+   --> benches/etl_streaming_benchmark_optimized.rs:237:4
+    |
+237 | fn optimal_config_for_memory() -> bucket::Config {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `etl-rust` (bench "etl_streaming_benchmark_optimized") generated 5 warnings
+    Finished `bench` profile [optimized] target(s) in 0.33s
+     Running benches/etl_streaming_benchmark_optimized.rs (target/release/deps/etl_streaming_benchmark_optimized-046fd7e4fbd10eb6)
+Gnuplot not found, using plotters backend
+error: unexpected argument 'optimization_levels' found
+
+Usage: etl_streaming_benchmark_optimized-046fd7e4fbd10eb6 [OPTIONS] [FILTER]
+
+For more information, try '--help'.
+error: bench failed, to rerun pass `--bench etl_streaming_benchmark_optimized`
+
+Caused by:
+  process didn't exit successfully: `/Users/cuongtran/Desktop/repo/etl-rust/target/release/deps/etl_streaming_benchmark_optimized-046fd7e4fbd10eb6 optimized_comparison optimization_levels --bench` (exit status: 2)
