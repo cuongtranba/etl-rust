@@ -44,7 +44,9 @@
 
 pub mod manager;
 pub mod processor;
+pub mod types;
 
 pub use manager::ETLPipelineManager;
-pub use processor::ETL;
 pub use processor::ETLPipeline;
+pub use processor::ETL;
+pub use types::ETLError;

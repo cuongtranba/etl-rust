@@ -95,10 +95,8 @@ where
             return Err(BucketError::Cancelled);
         }
 
-        self.sender
-            .send_async(item)
-            .await
-            .map_err(|err| BucketError::ConsumerError(err.to_string()))
+        self.sender.send_async(item).await?;
+        Ok(())
     }
 
     /// Signals that no more items will be produced.

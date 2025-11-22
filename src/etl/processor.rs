@@ -107,7 +107,6 @@ where
                     &cancel_clone,
                     move |ctx: &CancellationToken, items: &[E]| {
                         let etl = Arc::clone(&etl_clone);
-                        // Use Arc to avoid cloning items - zero-copy optimization
                         let items: Arc<[E]> = Arc::from(items);
                         let ctx = ctx.clone();
 
