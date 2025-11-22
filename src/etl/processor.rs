@@ -107,25 +107,24 @@ where
                     &cancel_clone,
                     move |ctx: &CancellationToken, items: &[E]| {
                         let etl = Arc::clone(&etl_clone);
-                        // Clone items vector to move into async block
-                        // Individual items aren't cloned during transform (transform takes &E)
-                        let items = items.to_vec();
+                        // Use Arc to avoid cloning items - zero-copy optimization
+                        let items: Arc<[E]> = Arc::from(items);
                         let ctx = ctx.clone();
 
                         async move {
-                            // Stream transforms with concurrency limit
-                            // Process up to 10 transforms concurrently for better latency
-                            let transform_futures: Vec<_> = items
-                                .iter()
-                                .map(|item| {
-                                    let etl = Arc::clone(&etl);
-                                    let ctx = ctx.clone();
-                                    async move { etl.transform(&ctx, item).await }
-                                })
-                                .collect();
+                            let concurrency =
+                                std::cmp::min(items.len(), std::cmp::max(10, num_cpus::get() * 2));
+
+                            let mut transform_futures = Vec::with_capacity(items.len());
+                            for item in items.iter() {
+                                let etl = Arc::clone(&etl);
+                                let ctx = ctx.clone();
+                                transform_futures
+                                    .push(async move { etl.transform(&ctx, item).await });
+                            }
 
                             let transforms: Vec<T> = futures::stream::iter(transform_futures)
-                                .buffer_unordered(10)
+                                .buffer_unordered(concurrency)
                                 .collect()
                                 .await;
 
