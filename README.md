@@ -300,6 +300,162 @@ Multiple Pipelines → Semaphore → Concurrent Execution
                    Zero-Copy Config
 ```
 
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application
+    participant Manager as ETLPipelineManager
+    participant Adapter as ETLPipelineAdapter
+    participant ETL as ETL<E,T>
+    participant Pipeline as ETLPipeline
+    participant Bucket as Bucket<T>
+    participant Worker as Worker Tasks
+
+    %% Initialization
+    App->>Manager: new(config, bucket_config)
+    App->>Manager: add_pipeline(pipeline, name)
+    Manager->>Adapter: wrap(ETL<E,T>)
+
+    %% Run All Pipelines
+    App->>Manager: run_all(cancel_token)
+
+    loop For each registered pipeline
+        Manager->>Manager: acquire semaphore permit
+        Manager->>Adapter: run(bucket_config, cancel_token)
+
+        %% Pre-processing
+        Adapter->>ETL: pre_process(cancel_token)
+        ETL->>Pipeline: pre_process()
+        Pipeline-->>ETL: Ok(())
+
+        %% Extraction Phase
+        Adapter->>ETL: run(config, cancel_token)
+        ETL->>Pipeline: extract(cancel_token)
+        Pipeline-->>ETL: Receiver<E>
+
+        %% Create Bucket & Workers
+        ETL->>Bucket: new(config)
+        ETL->>Bucket: run(cancel_token, processor)
+        Bucket->>Worker: spawn N workers
+
+        %% Main Processing Loop
+        loop While items available
+            ETL->>ETL: recv item from Receiver
+            ETL->>Bucket: consume(item)
+            Bucket->>Worker: send to channel
+
+            alt Batch ready (size/timeout)
+                Worker->>Worker: collect batch
+
+                %% Concurrent Transform
+                par Transform items concurrently
+                    Worker->>Pipeline: transform(item_1)
+                    Worker->>Pipeline: transform(item_2)
+                    Worker->>Pipeline: transform(item_N)
+                end
+                Pipeline-->>Worker: Vec<T>
+
+                %% Load batch
+                Worker->>Pipeline: load(transformed_batch)
+                Pipeline-->>Worker: Ok(())
+            end
+        end
+
+        %% Cleanup
+        ETL->>Bucket: close()
+        Worker-->>Bucket: workers complete
+        Bucket-->>ETL: Ok(())
+
+        %% Post-processing
+        Adapter->>ETL: post_process(cancel_token)
+        ETL->>Pipeline: post_process()
+        Pipeline-->>ETL: Ok(())
+
+        Adapter-->>Manager: Result
+        Manager->>Manager: release semaphore permit
+    end
+
+    Manager-->>App: Result<()>
+```
+
+#### Detailed Component Interactions
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Producer as Extract Task
+    participant Channel as mpsc::Receiver
+    participant ETL as ETL::run()
+    participant BucketCh as Bucket Channel
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+    participant DB as Load Target
+
+    %% Extraction produces items
+    Producer->>Channel: send(item_1)
+    Producer->>Channel: send(item_2)
+    Producer->>Channel: send(item_3)
+
+    %% ETL consumes and distributes
+    ETL->>Channel: recv()
+    Channel-->>ETL: item_1
+    ETL->>BucketCh: consume(item_1)
+
+    ETL->>Channel: recv()
+    Channel-->>ETL: item_2
+    ETL->>BucketCh: consume(item_2)
+
+    %% Workers process in parallel
+    par Worker 1 processes
+        W1->>BucketCh: recv batch
+        BucketCh-->>W1: [item_1, item_2]
+        W1->>W1: transform all
+        W1->>DB: load(batch)
+        DB-->>W1: Ok
+    and Worker 2 processes
+        W2->>BucketCh: recv batch
+        BucketCh-->>W2: [item_3, item_4]
+        W2->>W2: transform all
+        W2->>DB: load(batch)
+        DB-->>W2: Ok
+    end
+
+    %% Backpressure scenario
+    Note over ETL,BucketCh: If channel full, consume() blocks (backpressure)
+
+    %% Cancellation
+    Note over Producer,DB: CancellationToken propagates to all components
+```
+
+#### Cancellation Flow
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Token as CancellationToken
+    participant Manager as ETLPipelineManager
+    participant ETL as ETL
+    participant Bucket as Bucket
+    participant Worker as Workers
+
+    App->>Token: cancel()
+
+    par Propagate cancellation
+        Token-->>Manager: is_cancelled() = true
+        Token-->>ETL: is_cancelled() = true
+        Token-->>Bucket: is_cancelled() = true
+        Token-->>Worker: is_cancelled() = true
+    end
+
+    Worker->>Worker: process remaining batch
+    Worker->>Bucket: complete
+    Bucket->>ETL: Cancelled
+    ETL->>Manager: ETLError::Cancelled
+    Manager->>App: Err(Cancelled)
+```
+
 ## Error Handling
 
 Custom error types for different components:
